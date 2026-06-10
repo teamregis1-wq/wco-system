@@ -1,0 +1,33 @@
+name,type,address,barangay,latitude,longitude,contact,source,notes
+Jollibee - SM Batangas,fast_food,"Ground Floor, SM City Batangas, M. Pastor Avenue, Batangas City",Pallocan Kanluran,13.7559375,121.0688125,,foodpanda + SM official,mall centroid; official mall barangay used
+Taho Story - SM City Batangas,dessert,"Ground Floor, SM City Batangas, M. Pastor Avenue, Batangas City",Pallocan Kanluran,13.7559375,121.0688125,,foodpanda + SM official,mall centroid; listing text used nearby Gulod Labak
+Mang Inasal - SM City Batangas,fast_food,"SM City Batangas, M. Pastor Avenue, Batangas City",Pallocan Kanluran,13.7559375,121.0688125,,foodpanda + SM official,mall centroid
+Chowking - SM Batangas,fast_food,"SM City Batangas, M. Pastor Avenue, Batangas City",Pallocan Kanluran,13.7559375,121.0688125,,foodpanda + SM official,mall centroid
+Greenwich - SM Batangas,fast_food,"SM City Batangas, M. Pastor Avenue, Batangas City",Pallocan Kanluran,13.7559375,121.0688125,,foodpanda + SM official,mall centroid
+Max's Restaurant - SM Batangas,restaurant,"SM City Batangas, M. Pastor Avenue, Batangas City",Pallocan Kanluran,13.7559375,121.0688125,,foodpanda + SM official,mall centroid
+Kuya J Restaurant - SM Batangas,restaurant,"SM City Batangas, M. Pastor Avenue, Batangas City",Pallocan Kanluran,13.7559375,121.0688125,,foodpanda + SM official,mall centroid
+BonChon - SM City Batangas,fast_food,"SM City Batangas, M. Pastor Avenue, Batangas City",Pallocan Kanluran,13.7559375,121.0688125,,foodpanda + SM official,mall centroid
+Chatime - SM City Batangas,cafe,"SM City Batangas, M. Pastor Avenue, Batangas City",Pallocan Kanluran,13.7559375,121.0688125,,foodpanda + SM official,mall centroid
+Goldilocks - SM Batangas,bakery,"SM City Batangas, M. Pastor Avenue, Batangas City",Pallocan Kanluran,13.7559375,121.0688125,,foodpanda + SM official,mall centroid
+Jollibee - Wm Batangas,fast_food,"WalterMart Batangas, P. Burgos Street, Batangas City",Calicanto,13.7639759,121.0564598,,foodpanda + WalterMart,mall centroid
+Mang Inasal - Waltermart Batangas,fast_food,"Level 1 WalterMart Batangas, P. Burgos Street, Batangas City",Calicanto,13.7639759,121.0564598,,foodpanda + WalterMart,mall centroid
+Greenwich - WM Batangas,fast_food,"Ground Floor Walter Mart, P. Burgos Street, Batangas City",Calicanto,13.7639759,121.0564598,,foodpanda + WalterMart,mall centroid
+Lots'a Pizza - Waltermart Batangas,pizza,"WalterMart Batangas, P. Burgos Street, Batangas City",Calicanto,13.7639759,121.0564598,,foodpanda + WalterMart,mall centroid
+Potato Corner - Waltermart Batangas,snack_kiosk,"WalterMart Batangas, P. Burgos Street, Batangas City",Calicanto,13.7639759,121.0564598,,foodpanda + WalterMart,mall centroid
+24/7 Eats - Batangas City,restaurant,"Unit 108-113, 2nd Floor, Batangas Business Center, Purok 2, Batangas City",Calicanto,13.7598527,121.0571336,,foodpanda + Maptons,building centroid
+Burger Beast - Batangas City,fast_food,"Unit 108-113, 2nd Floor, Batangas Business Center, Purok 2, Batangas City",Calicanto,13.7598527,121.0571336,,foodpanda + Maptons,building centroid
+Lugaw Daddy - Batangas City,restaurant,"Unit 108-113, 2nd Floor, Batangas Business Center, Purok 2, Batangas City",Calicanto,13.7598527,121.0571336,,foodpanda + Maptons,building centroid
+Silog Express Atbp. - Batangas City,restaurant,"Unit 108-113, 2nd Floor, Batangas Business Center, Purok 2, Batangas City",Calicanto,13.7598527,121.0571336,,foodpanda + Maptons,building centroid
+Super Healthee - Batangas City,health_food,"Unit 108-113, 2nd Floor, Batangas Business Center, Purok 2, Batangas City",Calicanto,13.7598527,121.0571336,,foodpanda + Maptons,building centroid
+Jollibee - Baycity Mall,fast_food,"Ground Floor, Baycity Mall, Diego Silang cor. P. Burgos Street, Batangas City",Barangay 14,13.75869,121.05731,,foodpanda + Mapcarta,mall centroid
+Mang Inasal - Batangas Bay City,fast_food,"Second Floor, Bay City Mall, D. Silang Street, Batangas City",Barangay 14,13.75869,121.05731,,foodpanda + Mapcarta,mall centroid
+The Crunch - Bay City Mall Batangas City,fast_food,"Bay City Mall, D. Silang Street, Batangas City",Barangay 14,13.75869,121.05731,,foodpanda + Mapcarta,mall centroid
+Angel's Pizza - Citimart Commercial Complex,pizza,"Citimart Commercial Complex / Caedo Commercial Center, Batangas City",Calicanto,13.7645375,121.0560781,,foodpanda + Caedo center reference,commercial center centroid
+Boneless Fried Chicken (Chow) - Batangas City,fast_food,"25 P. Panganiban, Batangas City",Barangay 5,13.7559375,121.0618125,,foodpanda_public,plus-code centroid
+CUPS - Batangas City,cafe,"Second Floor EJ Building, Dona Concha Pastor Road, Batangas City",Kumintang Ilaya,13.7545625,121.0703125,,foodpanda_public,plus-code centroid
+Bistro Marinero - M Pastor Avenue,cafe,"M. Pastor Avenue, Batangas City",Pallocan Silangan,13.7537125,121.0701406,,foodpanda_public,plus-code centroid
+Hard Hat Cafe - Batangas,cafe,"Pastor Road, Batangas City",Pallocan Kanluran,13.7547125,121.0637344,,foodpanda_public,plus-code centroid
+AnJ Pizza - Pallocan West,pizza,"M. Pastor Avenue, in front of Jose C. Pastor Memorial Elementary School, Batangas City",Pallocan Kanluran,13.7539625,121.0658594,,foodpanda_public,plus-code centroid
+AA's Lomi - Balagtas Batangas City,restaurant,"National Road, Batangas City",Balagtas,13.7921875,121.0715625,,foodpanda_public,full plus-code centroid
+Babsi - Sta. Rita Batangas City,restaurant,"Brgy. Sta. Rita Karsada, Batangas City",Sta. Rita Karsada,13.7780625,121.0409375,,foodpanda_public,plus-code centroid
+Don Benito's - Sta Rita Batangas,dessert,"1405 LE National Road, Batangas City",Sta. Rita Karsada,13.7813125,121.0336875,,foodpanda_public,listing says Sta. Rita; polygon join recommended

@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls /Users/axcellandicho/Desktop/VSCODE/dsp/app/routers/ 2>/dev/null || echo \"no routers dir\")",
+      "Read(//Users/axcellandicho/Desktop/VSCODE/dsp/app/**)",
+      "Bash(npm run *)",
+      "Bash(xargs kill -9)",
+      "Bash(npx tsc *)",
+      "Bash(curl -s http://localhost:8000/api/v1/establishments?active_only=false -H \"Authorization: Bearer test\")",
+      "Bash(curl -s \"http://localhost:8000/api/v1/establishments\" -H \"Authorization: Bearer test\")",
+      "Bash(npx next *)",
+      "Bash(curl -s http://localhost:3000)",
+      "Bash(pkill -f \"next dev\")",
+      "Bash(cd /Users/axcellandicho/Desktop/VSCODE/wco-system/frontend && npm run dev > /tmp/next-dev.log 2>&1 & *)",
+      "Read(//tmp/**)",
+      "Bash(grep -n '{\"Code\", \"Name\"}\\\\|\"Code.*Name.*Type\\\\|{/\\\\* Table \\\\*/}\\\\|card, padding: 0' /Users/axcellandicho/Desktop/VSCODE/wco-system/frontend/app/establishments/page.tsx)"
+    ]
+  }
+}
