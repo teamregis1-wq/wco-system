@@ -457,9 +457,9 @@ export default function BiodieselDashboard() {
                   autosize: true, height: 440,
                   margin: { t: 10, r: 30, b: 10, l: 10 },
                   scene: {
-                    xaxis: { title: slice.x_label, titlefont: { size: 11 }, tickfont: { size: 10 } },
-                    yaxis: { title: slice.y_label, titlefont: { size: 11 }, tickfont: { size: 10 } },
-                    zaxis: { title: "Yield (%)", titlefont: { size: 11 }, tickfont: { size: 10 } },
+                    xaxis: { title: { text: slice.x_label, font: { size: 11 } }, tickfont: { size: 10 } },
+                    yaxis: { title: { text: slice.y_label, font: { size: 11 } }, tickfont: { size: 10 } },
+                    zaxis: { title: { text: "Yield (%)", font: { size: 11 } }, tickfont: { size: 10 } },    
                     bgcolor: "#fafafa",
                     camera: { eye: { x: 1.6, y: 1.6, z: 0.9 } },
                   },
