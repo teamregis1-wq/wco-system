@@ -1,11 +1,12 @@
 """Forecasting endpoints — inference + in-backend LSTM training."""
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db, SessionLocal
 from app.core.security import get_current_user, require_role
 from app.models.establishment import Establishment
-from app.schemas.schemas import ForecastResponse
+from app.schemas.schemas import ForecastResponse, AggregateForecastPoint
 from app.services.forecasting import generate_forecast, get_training_status, train_lstm
 
 router = APIRouter(prefix="/forecast", tags=["forecast"])
@@ -30,10 +31,41 @@ def trigger_training(
     return {"status": "training_started"}
 
 
+@router.get("/aggregate", response_model=list[AggregateForecastPoint])
+def aggregate_forecast(
+    horizon_weeks: int = Query(13, le=52),
+    db: Session = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    """Aggregate forecasted WCO supply across all active establishments."""
+    from app.models.establishment import Establishment
+    estabs = db.scalars(
+        select(Establishment).where(Establishment.is_active.is_(True))
+    ).all()
+
+    agg: dict[str, float] = {}
+    cnt: dict[str, int]   = {}
+
+    for e in estabs:
+        try:
+            fc = generate_forecast(db, establishment_id=e.id, horizon_weeks=horizon_weeks)
+            for p in fc.points:
+                k = str(p.week_date)
+                agg[k] = agg.get(k, 0.0) + p.predicted_liters
+                cnt[k] = cnt.get(k, 0) + 1
+        except Exception:
+            pass
+
+    return [
+        {"week_date": k, "total_predicted_liters": round(agg[k], 1), "establishment_count": cnt[k]}
+        for k in sorted(agg.keys())
+    ]
+
+
 @router.get("/{establishment_id}", response_model=ForecastResponse)
 def forecast_for_establishment(
     establishment_id: int,
-    horizon_weeks: int = 12,
+    horizon_weeks: int = 13,
     db: Session = Depends(get_db),
     _=Depends(get_current_user),
 ):

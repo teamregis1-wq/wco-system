@@ -1,12 +1,20 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import { RoleGuard } from "@/components/ProtectedRoute";
 import Navbar from "@/components/Navbar";
 import PageShell, { card, primaryBtn, ghostBtn, input, label } from "@/components/PageShell";
 import { getToken } from "@/lib/api";
+import ForecastChart from "@/components/ForecastChart";
+import type { ForecastPoint } from "@/lib/api";
+import { toast, Toaster } from "@/components/Toast";
+import {
+  BarChart, Bar, LineChart, Line,
+  XAxis, YAxis, CartesianGrid, Tooltip as RCTooltip,
+  ResponsiveContainer, ReferenceLine,
+} from "recharts";
 
 const LocationPicker = dynamic(() => import("@/components/LocationPicker"), { ssr: false });
 
@@ -50,6 +58,20 @@ interface WCORecord {
   created_at: string;
 }
 
+interface WCOCompleteness {
+  weeks_with_data: number;
+  expected_weeks: number;
+  completeness_pct: number;
+  first_record_date: string | null;
+  last_record_date: string | null;
+}
+interface MonthlyTotal {
+  year: number;
+  month: number;
+  total_liters: number;
+  record_count: number;
+}
+
 interface Establishment {
   id: number;
   wco_code: string;
@@ -70,13 +92,12 @@ interface Establishment {
 type FormData = {
   wco_code: string; name: string; type: string;
   latitude: string; longitude: string;
-  barangay: string; consent_given: boolean;
+  barangay: string;
 };
 
 const EMPTY_FORM: FormData = {
   wco_code: "", name: "", type: "restaurant",
   latitude: "", longitude: "", barangay: "",
-  consent_given: false,
 };
 
 // ── Tokens ────────────────────────────────────────────────────────────────────
@@ -175,7 +196,6 @@ function EstablishmentModal({
           wco_code: initial.wco_code, name: initial.name, type: initial.type,
           latitude: String(initial.latitude), longitude: String(initial.longitude),
           barangay: initial.barangay ?? "",
-          consent_given: initial.consent_given,
         }
       : EMPTY_FORM,
   );
@@ -225,7 +245,7 @@ function EstablishmentModal({
       const body: Record<string, unknown> = {
         name: form.name, type: form.type,
         latitude: parseFloat(form.latitude), longitude: parseFloat(form.longitude),
-        consent_given: form.consent_given,
+        consent_given: true,
       };
       if (!editing) body.wco_code = form.wco_code;
       if (form.barangay) body.barangay = form.barangay;
@@ -234,10 +254,11 @@ function EstablishmentModal({
         ? await apiFetch<Establishment>(`/establishments/${initial!.id}`, { method: "PATCH", body: JSON.stringify(body) })
         : await apiFetch<Establishment>("/establishments", { method: "POST", body: JSON.stringify(body) });
 
+      toast(editing ? "Establishment updated." : "Establishment added.");
       onSaved(saved);
       onClose();
     } catch (err) {
-      setError(String(err).replace("Error: ", ""));
+      setError(String(err).replace(/^(Type)?Error:\s*/, ""));
     } finally {
       setBusy(false);
     }
@@ -306,13 +327,6 @@ function EstablishmentModal({
             />
           </F>
 
-          <div style={{ marginBottom: 16 }}>
-            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, color: "#374151" }}>
-              <input type="checkbox" checked={form.consent_given} onChange={e => set("consent_given", e.target.checked)} style={{ width: 16, height: 16 }} />
-              <span>Owner has given consent for data collection</span>
-            </label>
-          </div>
-
           {error && (
             <div style={{ padding: "9px 12px", background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, fontSize: 13, color: "#dc2626", marginBottom: 12 }}>
               {error}
@@ -336,14 +350,25 @@ function EstablishmentModal({
 function WCORecordsModal({
   establishment,
   onClose,
+  onRecordChanged,
 }: {
   establishment: Establishment;
   onClose: () => void;
+  onRecordChanged?: () => void;
 }) {
-  const [records,     setRecords]     = useState<WCORecord[]>([]);
-  const [loading,     setLoading]     = useState(true);
-  const [error,       setError]       = useState<string | null>(null);
-  const [deleteConf,  setDeleteConf]  = useState<number | null>(null);
+  const [records,      setRecords]      = useState<WCORecord[]>([]);
+  const [loading,      setLoading]      = useState(true);
+  const [error,        setError]        = useState<string | null>(null);
+  const [deleteConf,   setDeleteConf]   = useState<number | null>(null);
+  const [editingId,    setEditingId]    = useState<number | null>(null);
+  const [editQty,      setEditQty]      = useState("");
+  const [editNotes,    setEditNotes]    = useState("");
+  const [editBusy,     setEditBusy]     = useState(false);
+  const [bulkStatus,   setBulkStatus]   = useState<string | null>(null);
+  const [bulkImporting,setBulkImporting]= useState(false);
+  const [completeness, setCompleteness] = useState<WCOCompleteness | null>(null);
+  const [monthlyTotals,setMonthlyTotals]= useState<MonthlyTotal[]>([]);
+  const wcoFileRef = useRef<HTMLInputElement>(null);
 
   // Add-record form state
   const [weekDate,    setWeekDate]    = useState("");
@@ -357,8 +382,14 @@ function WCORecordsModal({
     setLoading(true);
     setError(null);
     try {
-      const data = await apiFetch<WCORecord[]>(`/wco/records?establishment_id=${establishment.id}`);
+      const [data, comp, monthly] = await Promise.all([
+        apiFetch<WCORecord[]>(`/wco/records?establishment_id=${establishment.id}`),
+        apiFetch<WCOCompleteness>(`/wco/completeness/${establishment.id}`).catch(() => null),
+        apiFetch<MonthlyTotal[]>(`/wco/monthly/${establishment.id}`).catch(() => [] as MonthlyTotal[]),
+      ]);
       setRecords(data);
+      setCompleteness(comp);
+      setMonthlyTotals(monthly as MonthlyTotal[]);
     } catch (e) { setError(String(e)); }
     finally { setLoading(false); }
   }, [establishment.id]);
@@ -382,8 +413,10 @@ function WCORecordsModal({
       });
       setRecords(prev => [rec, ...prev]);
       setWeekDate(""); setWeekEndDate(""); setQuantity(""); setNotes("");
+      toast("WCO record added.");
+      onRecordChanged?.();
     } catch (err) {
-      setAddError(String(err).replace("Error: ", ""));
+      setAddError(String(err).replace(/^(Type)?Error:\s*/, ""));
     } finally {
       setAddBusy(false);
     }
@@ -394,7 +427,61 @@ function WCORecordsModal({
       await apiFetch(`/wco/records/${id}`, { method: "DELETE" });
       setRecords(prev => prev.filter(r => r.id !== id));
       setDeleteConf(null);
-    } catch (err) { alert(String(err)); }
+      toast("Record deleted.", "info");
+      onRecordChanged?.();
+    } catch (err) { toast(String(err).replace(/^(Type)?Error:\s*/, ""), "error"); }
+  }
+
+  async function saveEdit(id: number) {
+    setEditBusy(true);
+    try {
+      const updated = await apiFetch<WCORecord>(`/wco/records/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ quantity_liters: parseFloat(editQty), notes: editNotes.trim() || null }),
+      });
+      setRecords(prev => prev.map(r => r.id === id ? updated : r));
+      setEditingId(null);
+      toast("Record updated.");
+    } catch (err) { toast(String(err).replace(/^(Type)?Error:\s*/, ""), "error"); }
+    finally { setEditBusy(false); }
+  }
+
+  async function handleWCOCSV(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    setBulkImporting(true); setBulkStatus(null);
+    const text = await file.text();
+    const lines = text.trim().split(/\r?\n/);
+    if (lines.length < 2) { setBulkImporting(false); setBulkStatus("CSV empty or missing header."); return; }
+    const headers = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/^"|"$/g, ""));
+    const rows = lines.slice(1).filter(l => l.trim()).map(line => {
+      const vals = line.split(",").map(v => v.trim().replace(/^"|"$/g, ""));
+      const row: Record<string, string> = {};
+      headers.forEach((h, i) => { row[h] = vals[i] ?? ""; });
+      return row;
+    });
+    const find = (row: Record<string, string>, ...keys: string[]) => {
+      for (const k of keys) { const v = row[k]; if (v != null) return v; } return "";
+    };
+    const payload = rows.map(row => ({
+      establishment_id: establishment.id,
+      week_date: find(row, "week_date", "date", "week"),
+      week_end_date: find(row, "week_end_date", "end_date") || null,
+      quantity_liters: parseFloat(find(row, "quantity_liters", "quantity", "liters")),
+      notes: find(row, "notes") || null,
+    })).filter(r => r.week_date && !isNaN(r.quantity_liters));
+    if (!payload.length) { setBulkImporting(false); setBulkStatus("No valid rows. Headers: week_date,quantity_liters,notes"); return; }
+    try {
+      const res = await apiFetch<{ imported: number; skipped: number }>("/wco/records/bulk", {
+        method: "POST", body: JSON.stringify(payload),
+      });
+      setBulkStatus(`${res.imported} imported, ${res.skipped} skipped.`);
+      toast(`${res.imported} WCO record${res.imported !== 1 ? "s" : ""} imported.`);
+      await loadRecords();
+      onRecordChanged?.();
+    } catch (err) { setBulkStatus(String(err).replace(/^(Type)?Error:\s*/, "")); toast(String(err).replace(/^(Type)?Error:\s*/, ""), "error"); }
+    finally { setBulkImporting(false); }
   }
 
   const totalLiters = records.reduce((sum, r) => sum + r.quantity_liters, 0);
@@ -408,8 +495,43 @@ function WCORecordsModal({
             <h2 style={{ fontSize: 17, fontWeight: 800, color: "#111827", margin: "0 0 2px" }}>WCO Records</h2>
             <div style={{ fontSize: 12, color: "#64748b" }}>{establishment.name} · {establishment.wco_code}</div>
           </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: "#94a3b8", padding: "2px 6px" }}>✕</button>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <RoleGuard action="edit">
+              <input ref={wcoFileRef} type="file" accept=".csv" style={{ display: "none" }} onChange={handleWCOCSV} />
+              <button
+                onClick={() => wcoFileRef.current?.click()}
+                disabled={bulkImporting}
+                style={{ ...ghostBtn, fontSize: 11, padding: "5px 12px", color: "#0369a1", borderColor: "#7dd3fc", opacity: bulkImporting ? 0.45 : 1 }}
+              >
+                {bulkImporting ? "Importing…" : "Import CSV"}
+              </button>
+            </RoleGuard>
+            <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: "#94a3b8", padding: "2px 6px" }}>✕</button>
+          </div>
         </div>
+        {bulkStatus && (
+          <div style={{ marginBottom: 12, padding: "7px 12px", background: bulkStatus.includes("imported") ? "#f0fdf4" : "#fef2f2", border: `1px solid ${bulkStatus.includes("imported") ? "#bbf7d0" : "#fca5a5"}`, borderRadius: 8, fontSize: 12, color: bulkStatus.includes("imported") ? "#166534" : "#dc2626" }}>
+            {bulkStatus}
+          </div>
+        )}
+
+        {/* Completeness badge */}
+        {completeness && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, padding: "8px 14px", background: "#f8fafc", borderRadius: 10, border: "1px solid #e2e8f0" }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 3 }}>Data completeness</div>
+              <div style={{ height: 6, background: "#e2e8f0", borderRadius: 99, overflow: "hidden" }}>
+                <div style={{ height: "100%", width: `${completeness.completeness_pct}%`, background: completeness.completeness_pct >= 75 ? "#0f6e56" : completeness.completeness_pct >= 50 ? "#d97706" : "#dc2626", borderRadius: 99, transition: "width 0.4s ease" }} />
+              </div>
+            </div>
+            <div style={{ fontSize: 18, fontWeight: 900, color: completeness.completeness_pct >= 75 ? "#0f6e56" : completeness.completeness_pct >= 50 ? "#d97706" : "#dc2626", fontVariantNumeric: "tabular-nums", minWidth: 48, textAlign: "right" }}>
+              {completeness.completeness_pct.toFixed(0)}%
+            </div>
+            <div style={{ fontSize: 10, color: "#94a3b8" }}>
+              {completeness.weeks_with_data}/{completeness.expected_weeks} wks
+            </div>
+          </div>
+        )}
 
         {/* Summary strip */}
         <div style={{ display: "flex", gap: 12, marginBottom: 20 }}>
@@ -424,6 +546,25 @@ function WCORecordsModal({
             </div>
           ))}
         </div>
+
+        {/* Monthly totals chart */}
+        {monthlyTotals.length > 1 && (
+          <div style={{ marginBottom: 18 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>Monthly WCO Totals</div>
+            <ResponsiveContainer width="100%" height={110}>
+              <BarChart data={monthlyTotals.map(m => ({
+                label: new Date(m.year, m.month - 1).toLocaleString("default", { month: "short", year: "2-digit" }),
+                total: m.total_liters,
+              }))} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                <XAxis dataKey="label" tick={{ fontSize: 9, fill: "#94a3b8" }} tickLine={false} axisLine={false} />
+                <YAxis tick={{ fontSize: 9, fill: "#94a3b8" }} tickLine={false} axisLine={false} tickFormatter={v => `${v}L`} width={36} />
+                <RCTooltip formatter={(v: number) => [`${v.toLocaleString(undefined, { maximumFractionDigits: 1 })} L`, "Total WCO"]} contentStyle={{ fontSize: 11, borderRadius: 8 }} />
+                <Bar dataKey="total" fill="#0f6e56" radius={[4, 4, 0, 0]} maxBarSize={28} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
 
         {/* Add record form (researcher+) */}
         <RoleGuard action="edit">
@@ -503,26 +644,62 @@ function WCORecordsModal({
                     <td style={{ padding: "9px 12px", borderBottom: "1px solid #f1f5f9", fontWeight: 600, color: "#1a202c", whiteSpace: "nowrap" }}>
                       {weekRangeLabel(r.week_date, r.week_end_date)}
                     </td>
-                    <td style={{ padding: "9px 12px", borderBottom: "1px solid #f1f5f9", color: "#0f6e56", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
-                      {r.quantity_liters.toLocaleString(undefined, { maximumFractionDigits: 1 })} L
-                    </td>
-                    <td style={{ padding: "9px 12px", borderBottom: "1px solid #f1f5f9", color: "#64748b", fontSize: 12 }}>
-                      {r.notes ?? "—"}
-                    </td>
-                    <td style={{ padding: "9px 12px", borderBottom: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
-                      <RoleGuard action="edit">
-                        {deleteConf === r.id ? (
+                    {editingId === r.id ? (
+                      <>
+                        <td style={{ padding: "6px 8px", borderBottom: "1px solid #f1f5f9" }}>
+                          <input
+                            type="number" step="0.1" min="0"
+                            value={editQty}
+                            onChange={e => setEditQty(e.target.value)}
+                            style={{ ...input, padding: "4px 8px", fontSize: 12, width: 80 }}
+                            autoFocus
+                          />
+                        </td>
+                        <td style={{ padding: "6px 8px", borderBottom: "1px solid #f1f5f9" }}>
+                          <input
+                            value={editNotes}
+                            onChange={e => setEditNotes(e.target.value)}
+                            placeholder="Notes"
+                            style={{ ...input, padding: "4px 8px", fontSize: 12, width: 120 }}
+                          />
+                        </td>
+                        <td style={{ padding: "6px 8px", borderBottom: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
                           <div style={{ display: "flex", gap: 4 }}>
-                            <button onClick={() => deleteRecord(r.id)} style={{ ...ghostBtn, fontSize: 11, padding: "3px 8px", color: "#dc2626", borderColor: "#fca5a5" }}>Confirm</button>
-                            <button onClick={() => setDeleteConf(null)} style={{ ...ghostBtn, fontSize: 11, padding: "3px 8px" }}>Cancel</button>
+                            <button onClick={() => saveEdit(r.id)} disabled={editBusy} style={{ ...ghostBtn, fontSize: 11, padding: "3px 8px", color: "#166534", borderColor: "#86efac", opacity: editBusy ? 0.7 : 1 }}>
+                              {editBusy ? "…" : "Save"}
+                            </button>
+                            <button onClick={() => setEditingId(null)} style={{ ...ghostBtn, fontSize: 11, padding: "3px 8px" }}>Cancel</button>
                           </div>
-                        ) : (
-                          <button onClick={() => setDeleteConf(r.id)} style={{ ...ghostBtn, fontSize: 11, padding: "3px 8px", color: "#dc2626", borderColor: "#fca5a5" }}>
-                            Delete
-                          </button>
-                        )}
-                      </RoleGuard>
-                    </td>
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        <td style={{ padding: "9px 12px", borderBottom: "1px solid #f1f5f9", color: "#0f6e56", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
+                          {r.quantity_liters.toLocaleString(undefined, { maximumFractionDigits: 1 })} L
+                        </td>
+                        <td style={{ padding: "9px 12px", borderBottom: "1px solid #f1f5f9", color: "#64748b", fontSize: 12 }}>
+                          {r.notes ?? "—"}
+                        </td>
+                        <td style={{ padding: "9px 12px", borderBottom: "1px solid #f1f5f9", whiteSpace: "nowrap" }}>
+                          <RoleGuard action="edit">
+                            <div style={{ display: "flex", gap: 4 }}>
+                              <button
+                                onClick={() => { setEditingId(r.id); setEditQty(String(r.quantity_liters)); setEditNotes(r.notes ?? ""); }}
+                                style={{ ...ghostBtn, fontSize: 11, padding: "3px 8px", color: "#0369a1", borderColor: "#7dd3fc" }}
+                              >Edit</button>
+                              {deleteConf === r.id ? (
+                                <>
+                                  <button onClick={() => deleteRecord(r.id)} style={{ ...ghostBtn, fontSize: 11, padding: "3px 8px", color: "#dc2626", borderColor: "#fca5a5" }}>Confirm</button>
+                                  <button onClick={() => setDeleteConf(null)} style={{ ...ghostBtn, fontSize: 11, padding: "3px 8px" }}>Cancel</button>
+                                </>
+                              ) : (
+                                <button onClick={() => setDeleteConf(r.id)} style={{ ...ghostBtn, fontSize: 11, padding: "3px 8px", color: "#dc2626", borderColor: "#fca5a5" }}>Delete</button>
+                              )}
+                            </div>
+                          </RoleGuard>
+                        </td>
+                      </>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -574,7 +751,8 @@ function QualityTestsModal({ establishment, onClose }: { establishment: Establis
       });
       setTests(prev => [t, ...prev]);
       setSampleDate(""); setFfa(""); setVisc(""); setDens("");
-    } catch (err) { setAddError(String(err).replace("Error: ", "")); }
+      toast("Quality test added.");
+    } catch (err) { setAddError(String(err).replace(/^(Type)?Error:\s*/, "")); }
     finally { setAddBusy(false); }
   }
 
@@ -582,7 +760,8 @@ function QualityTestsModal({ establishment, onClose }: { establishment: Establis
     try {
       await apiFetch(`/quality-tests/${id}`, { method: "DELETE" });
       setTests(prev => prev.filter(t => t.id !== id)); setDeleteConf(null);
-    } catch (err) { alert(String(err)); }
+      toast("Test deleted.", "info");
+    } catch (err) { toast(String(err).replace(/^(Type)?Error:\s*/, ""), "error"); }
   }
 
   function ffaGrade(v: number) {
@@ -631,6 +810,31 @@ function QualityTestsModal({ establishment, onClose }: { establishment: Establis
             </div>
           </form>
         </RoleGuard>
+
+        {/* FFA trend chart */}
+        {!loading && tests.length > 1 && (() => {
+          const sorted = [...tests].sort((a, b) => a.sample_date.localeCompare(b.sample_date));
+          const chartData = sorted.map(t => ({
+            date: new Date(t.sample_date).toLocaleDateString("en-PH", { month: "short", day: "numeric" }),
+            ffa: t.ffa_pct,
+          }));
+          return (
+            <div style={{ marginBottom: 18 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>FFA % Trend</div>
+              <ResponsiveContainer width="100%" height={110}>
+                <LineChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                  <XAxis dataKey="date" tick={{ fontSize: 9, fill: "#94a3b8" }} tickLine={false} axisLine={false} />
+                  <YAxis tick={{ fontSize: 9, fill: "#94a3b8" }} tickLine={false} axisLine={false} tickFormatter={v => `${v}%`} width={32} domain={[0, "auto"]} />
+                  <RCTooltip formatter={(v: number) => [`${v.toFixed(2)}%`, "FFA"]} contentStyle={{ fontSize: 11, borderRadius: 8 }} />
+                  <ReferenceLine y={3} stroke="#d97706" strokeDasharray="4 3" label={{ value: "Good", position: "right", fontSize: 9, fill: "#d97706" }} />
+                  <ReferenceLine y={5} stroke="#dc2626" strokeDasharray="4 3" label={{ value: "Poor", position: "right", fontSize: 9, fill: "#dc2626" }} />
+                  <Line type="monotone" dataKey="ffa" stroke="#7c3aed" strokeWidth={2} dot={{ r: 3, fill: "#7c3aed" }} activeDot={{ r: 5 }} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          );
+        })()}
 
         {loading ? (
           <div style={{ textAlign: "center", padding: "32px 0", color: "#94a3b8", fontSize: 13 }}>Loading…</div>
@@ -684,6 +888,217 @@ function QualityTestsModal({ establishment, onClose }: { establishment: Establis
   );
 }
 
+// ── Forecast modal ────────────────────────────────────────────────────────────
+
+function ForecastModal({ establishment, onClose }: { establishment: Establishment; onClose: () => void }) {
+  const [points, setPoints] = useState<ForecastPoint[] | null>(null);
+  const [historical, setHistorical] = useState<WCORecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    Promise.all([
+      apiFetch<{ points: ForecastPoint[]; establishment_id: number; model_version: string }>(
+        `/forecast/${establishment.id}?horizon_weeks=12`
+      ),
+      apiFetch<WCORecord[]>(`/wco/records?establishment_id=${establishment.id}`),
+    ])
+      .then(([fc, recs]) => { setPoints(fc.points); setHistorical(recs); })
+      .catch(e => setError(String(e).replace(/^(Type)?Error:\s*/, "")))
+      .finally(() => setLoading(false));
+  }, [establishment.id]);
+
+  return (
+    <div style={MO.overlay} onClick={onClose}>
+      <div style={{ ...MO.modal, maxWidth: 740 }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
+          <div>
+            <h2 style={{ fontSize: 17, fontWeight: 800, color: "#111827", margin: "0 0 2px" }}>12-Week LSTM Forecast</h2>
+            <div style={{ fontSize: 12, color: "#64748b" }}>{establishment.name} · {establishment.wco_code}</div>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: "#94a3b8" }}>✕</button>
+        </div>
+        {loading ? (
+          <div style={{ textAlign: "center", padding: "48px 0", color: "#94a3b8", fontSize: 13 }}>Loading forecast…</div>
+        ) : error ? (
+          <div style={{ padding: "12px 16px", background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 10, fontSize: 13, color: "#dc2626" }}>
+            {error.includes("503") || error.includes("No trained")
+              ? "No trained model yet — go to Admin → Forecasting and click Retrain LSTM first."
+              : error}
+          </div>
+        ) : points ? (
+          <ForecastChart points={points} historical={historical} />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+// ── Establishment detail modal ────────────────────────────────────────────────
+
+function printForecastChart(name: string, wcoCode: string) {
+  const el = document.getElementById("detail-forecast-chart");
+  if (!el) return;
+  const win = window.open("", "_blank", "width=1000,height=700");
+  if (!win) return;
+  win.document.write(`<!DOCTYPE html><html><head><title>Forecast – ${name}</title>
+<style>*{box-sizing:border-box}body{margin:24px;font-family:system-ui,sans-serif;background:white}svg{overflow:visible}@media print{@page{margin:15mm;size:A4 landscape}body{margin:0}}</style>
+</head><body>
+<h2 style="font-size:16px;font-weight:900;color:#111;margin:0 0 4px">${name} – 12-Week LSTM Forecast</h2>
+<p style="font-size:12px;color:#64748b;margin:0 0 16px">${wcoCode} · WCO Predictive Mapping System</p>
+${el.outerHTML}
+</body></html>`);
+  win.document.close();
+  setTimeout(() => { win.focus(); win.print(); }, 400);
+}
+
+function EstablishmentDetailModal({
+  establishment: e,
+  onClose,
+  onEdit,
+  onViewWCO,
+  onViewTests,
+  onToggleActive,
+  onDelete,
+}: {
+  establishment: Establishment;
+  onClose: () => void;
+  onEdit: (e: Establishment) => void;
+  onViewWCO: (e: Establishment) => void;
+  onViewTests: (e: Establishment) => void;
+  onToggleActive: (e: Establishment) => void;
+  onDelete: (id: number) => void;
+}) {
+  const [deleteConf,   setDeleteConf]   = useState(false);
+  const [deactivConf,  setDeactivConf]  = useState(false);
+  const [fcPoints,     setFcPoints]     = useState<ForecastPoint[] | null>(null);
+  const [historical,   setHistorical]   = useState<WCORecord[]>([]);
+  const [fcLoading,    setFcLoading]    = useState(true);
+  const [fcError,      setFcError]      = useState<string | null>(null);
+  const [trainMeta,    setTrainMeta]    = useState<{ model_version: string | null; mae: number | null; rmse: number | null; r2: number | null } | null>(null);
+
+  useEffect(() => {
+    setFcLoading(true); setFcError(null);
+    Promise.all([
+      apiFetch<{ points: ForecastPoint[]; model_version?: string }>(`/forecast/${e.id}?horizon_weeks=12`),
+      apiFetch<WCORecord[]>(`/wco/records?establishment_id=${e.id}`),
+      apiFetch<{ model_version: string | null; metrics: { mae: number; rmse: number; r2: number } | null }>("/forecast/training-status").catch(() => null),
+    ])
+      .then(([fc, recs, ts]) => {
+        setFcPoints(fc.points);
+        setHistorical(recs);
+        if (ts) setTrainMeta({ model_version: ts.model_version, mae: ts.metrics?.mae ?? null, rmse: ts.metrics?.rmse ?? null, r2: ts.metrics?.r2 ?? null });
+      })
+      .catch(err => setFcError(String(err).replace(/^(Type)?Error:\s*/, "")))
+      .finally(() => setFcLoading(false));
+  }, [e.id]);
+
+  return (
+    <div style={MO.overlay} onClick={onClose}>
+      <div style={{ ...MO.modal, maxWidth: 680 }} onClick={ev => ev.stopPropagation()}>
+        {/* Header */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+              <TypeBadge type={e.type} />
+              <StatusBadge active={e.is_active} />
+            </div>
+            <h2 style={{ fontSize: 18, fontWeight: 900, color: "#111827", margin: "0 0 2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.name}</h2>
+            <div style={{ fontSize: 12, color: "#64748b", display: "flex", gap: 12, flexWrap: "wrap" }}>
+              <span style={{ fontFamily: "monospace", fontWeight: 700, color: "#0f6e56" }}>{e.wco_code}</span>
+              {e.barangay && <span>{e.barangay}</span>}
+              <span style={{ color: "#94a3b8" }}>{e.latitude.toFixed(4)}, {e.longitude.toFixed(4)}</span>
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: "#94a3b8", padding: "2px 6px", flexShrink: 0 }}>✕</button>
+        </div>
+
+        {/* Action buttons */}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, paddingBottom: 18, borderBottom: "1px solid #f1f5f9", marginBottom: 20 }}>
+          <button onClick={() => onViewWCO(e)} style={{ ...ghostBtn, fontSize: 12, padding: "6px 14px", color: "#0f6e56", borderColor: "#86efac" }}>
+            WCO Records
+          </button>
+          <button onClick={() => onViewTests(e)} style={{ ...ghostBtn, fontSize: 12, padding: "6px 14px", color: "#7c3aed", borderColor: "#c4b5fd" }}>
+            Quality Tests
+          </button>
+          <div style={{ flex: 1 }} />
+          <RoleGuard action="edit">
+            <button onClick={() => onEdit(e)} style={{ ...ghostBtn, fontSize: 12, padding: "6px 14px" }}>Edit</button>
+            {e.is_active ? (
+              deactivConf ? (
+                <>
+                  <button onClick={() => { onToggleActive(e); setDeactivConf(false); onClose(); }} style={{ ...ghostBtn, fontSize: 12, padding: "6px 14px", color: "#dc2626", borderColor: "#fca5a5" }}>Confirm deactivate</button>
+                  <button onClick={() => setDeactivConf(false)} style={{ ...ghostBtn, fontSize: 12, padding: "6px 14px" }}>Cancel</button>
+                </>
+              ) : (
+                <button onClick={() => setDeactivConf(true)} style={{ ...ghostBtn, fontSize: 12, padding: "6px 14px", color: "#dc2626", borderColor: "#fca5a5" }}>Deactivate</button>
+              )
+            ) : (
+              <button onClick={() => { onToggleActive(e); onClose(); }} style={{ ...ghostBtn, fontSize: 12, padding: "6px 14px", color: "#065f46", borderColor: "#86efac" }}>Activate</button>
+            )}
+          </RoleGuard>
+          <RoleGuard action="delete">
+            {deleteConf ? (
+              <>
+                <button onClick={() => onDelete(e.id)} style={{ ...ghostBtn, fontSize: 12, padding: "6px 14px", color: "#dc2626", borderColor: "#fca5a5" }}>Confirm delete</button>
+                <button onClick={() => setDeleteConf(false)} style={{ ...ghostBtn, fontSize: 12, padding: "6px 14px" }}>Cancel</button>
+              </>
+            ) : (
+              <button onClick={() => setDeleteConf(true)} style={{ ...ghostBtn, fontSize: 12, padding: "6px 14px", color: "#dc2626", borderColor: "#fca5a5" }}>Delete</button>
+            )}
+          </RoleGuard>
+        </div>
+
+        {/* 12-week LSTM Forecast (inline) */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              12-Week LSTM Forecast
+            </div>
+            {trainMeta && (
+              <div style={{ display: "flex", gap: 10, marginTop: 4, flexWrap: "wrap" }}>
+                {trainMeta.model_version && (
+                  <span style={{ fontSize: 10, color: "#94a3b8" }}>v{trainMeta.model_version}</span>
+                )}
+                {trainMeta.mae != null && (
+                  <span style={{ fontSize: 10, color: "#94a3b8" }}>MAE {trainMeta.mae} L</span>
+                )}
+                {trainMeta.rmse != null && (
+                  <span style={{ fontSize: 10, color: "#94a3b8" }}>RMSE {trainMeta.rmse} L</span>
+                )}
+                {trainMeta.r2 != null && (
+                  <span style={{ fontSize: 10, fontWeight: 700, color: trainMeta.r2 >= 0.8 ? "#0f6e56" : trainMeta.r2 >= 0.6 ? "#d97706" : "#dc2626" }}>
+                    R² {trainMeta.r2.toFixed(3)}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+          {fcPoints && fcPoints.length > 0 && (
+            <button onClick={() => printForecastChart(e.name, e.wco_code)} style={{ ...ghostBtn, fontSize: 10, padding: "3px 10px", color: "#374151" }}>
+              Export PDF
+            </button>
+          )}
+        </div>
+        <div id="detail-forecast-chart">
+          {fcLoading ? (
+            <div style={{ height: 160, display: "flex", alignItems: "center", justifyContent: "center", color: "#94a3b8", fontSize: 12 }}>Loading forecast…</div>
+          ) : fcError ? (
+            <div style={{ padding: "10px 14px", background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 10, fontSize: 13, color: "#dc2626" }}>
+              {fcError.includes("503") || fcError.includes("No trained") || fcError.includes("404")
+                ? "No trained model yet — go to Admin → Forecasting and train the LSTM first."
+                : fcError}
+            </div>
+          ) : fcPoints ? (
+            <ForecastChart points={fcPoints} historical={historical} />
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 function EstablishmentsContent() {
@@ -693,15 +1108,20 @@ function EstablishmentsContent() {
   const [search,     setSearch]     = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [showAll,    setShowAll]    = useState(false);
-  const [modal,          setModal]          = useState<null | "add" | Establishment>(null);
-  const [deleteConf,     setDeleteConf]     = useState<number | null>(null);
-  const [deactivateConf, setDeactivateConf] = useState<number | null>(null);
-  const [wcoModal,       setWcoModal]       = useState<Establishment | null>(null);
+  const [modal,       setModal]       = useState<null | "add" | Establishment>(null);
+  const [detailModal, setDetailModal] = useState<Establishment | null>(null);
+  const [wcoModal,    setWcoModal]    = useState<Establishment | null>(null);
+  const [qualityModal,setQualityModal]= useState<Establishment | null>(null);
   const [sortKey,        setSortKey]        = useState<string | null>(null);
   const [selected,       setSelected]       = useState<Set<number>>(new Set());
   const [batchDelConf,   setBatchDelConf]   = useState(false);
   const [batchDeleting,  setBatchDeleting]  = useState(false);
   const [sortDir,        setSortDir]        = useState<"asc" | "desc">("asc");
+  const [importStatus,   setImportStatus]   = useState<string | null>(null);
+  const [importing,      setImporting]      = useState(false);
+  const [lastCollection, setLastCollection] = useState<Record<string, string>>({});
+  const [exportOpen,     setExportOpen]     = useState(false);
+  const estabFileRef = useRef<HTMLInputElement>(null);
 
   function toggleSort(key: string) {
     if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc");
@@ -724,6 +1144,7 @@ function EstablishmentsContent() {
   }
 
   async function batchDelete() {
+    const count = selected.size;
     setBatchDeleting(true);
     for (const id of selected) {
       try { await apiFetch(`/establishments/${id}`, { method: "DELETE" }); } catch { /* skip */ }
@@ -731,6 +1152,7 @@ function EstablishmentsContent() {
     setSelected(new Set());
     setBatchDelConf(false);
     setBatchDeleting(false);
+    toast(`${count} establishment${count !== 1 ? "s" : ""} deleted.`, "info");
     await load();
   }
 
@@ -745,6 +1167,19 @@ function EstablishmentsContent() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (!all.length) return;
+    apiFetch<Record<string, string>>("/wco/last-collection")
+      .then(d => setLastCollection(d))
+      .catch(() => {});
+  }, [all]);
+
+  const refreshLastCollection = useCallback(() => {
+    apiFetch<Record<string, string>>("/wco/last-collection")
+      .then(d => setLastCollection(d))
+      .catch(() => {});
+  }, []);
 
   const displayed = all.filter(e => {
     if (!showAll && !e.is_active) return false;
@@ -776,15 +1211,17 @@ function EstablishmentsContent() {
         body: JSON.stringify({ is_active: !e.is_active }),
       });
       setAll(prev => prev.map(x => x.id === updated.id ? updated : x));
-    } catch (err) { alert(String(err)); }
+      toast(updated.is_active ? "Establishment activated." : "Establishment deactivated.", "info");
+    } catch (err) { toast(String(err).replace(/^(Type)?Error:\s*/, ""), "error"); }
   }
 
   async function deleteEst(id: number) {
     try {
       await apiFetch(`/establishments/${id}`, { method: "DELETE" });
+      setDetailModal(null);
+      toast("Establishment deleted.", "info");
       await load();
-      setDeleteConf(null);
-    } catch (err) { alert(String(err)); }
+    } catch (err) { toast(String(err).replace(/^(Type)?Error:\s*/, ""), "error"); }
   }
 
   function onSaved(saved: Establishment) {
@@ -792,6 +1229,74 @@ function EstablishmentsContent() {
       const exists = prev.find(x => x.id === saved.id);
       return exists ? prev.map(x => x.id === saved.id ? saved : x) : [saved, ...prev];
     });
+  }
+
+  async function handleEstabCSV(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    setImporting(true); setImportStatus(null);
+    const text = await file.text();
+    const lines = text.trim().split(/\r?\n/);
+    if (lines.length < 2) { setImporting(false); setImportStatus("CSV empty or missing header."); return; }
+    const headers = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/^"|"$/g, ""));
+    const rows = lines.slice(1).filter(l => l.trim()).map(line => {
+      const vals = line.split(",").map(v => v.trim().replace(/^"|"$/g, ""));
+      const row: Record<string, string> = {};
+      headers.forEach((h, i) => { row[h] = vals[i] ?? ""; });
+      return row;
+    });
+    const find = (row: Record<string, string>, ...keys: string[]) => {
+      for (const k of keys) { const v = row[k]; if (v != null) return v; } return "";
+    };
+    const payload = rows.map(row => ({
+      wco_code: find(row, "wco_code", "code"),
+      name: find(row, "name"),
+      type: find(row, "type") || "restaurant",
+      latitude: parseFloat(find(row, "latitude", "lat")),
+      longitude: parseFloat(find(row, "longitude", "lng", "lon")),
+      barangay: find(row, "barangay") || null,
+      consent_given: true,
+    })).filter(r => r.wco_code && r.name && !isNaN(r.latitude) && !isNaN(r.longitude));
+    if (!payload.length) { setImporting(false); setImportStatus("No valid rows found. Check headers: wco_code,name,type,latitude,longitude,barangay"); return; }
+    try {
+      const res = await apiFetch<{ imported: number; skipped: number }>("/establishments/bulk", {
+        method: "POST", body: JSON.stringify(payload),
+      });
+      setImportStatus(`${res.imported} imported, ${res.skipped} skipped.`);
+      toast(`${res.imported} establishment${res.imported !== 1 ? "s" : ""} imported.`);
+      await load();
+    } catch (err) { setImportStatus(String(err).replace(/^(Type)?Error:\s*/, "")); toast(String(err).replace(/^(Type)?Error:\s*/, ""), "error"); }
+    finally { setImporting(false); }
+  }
+
+  function exportGeoJSON() {
+    const features = sorted.map(est => ({
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [est.longitude, est.latitude] },
+      properties: { wco_code: est.wco_code, name: est.name, type: est.type, barangay: est.barangay, is_active: est.is_active },
+    }));
+    const blob = new Blob([JSON.stringify({ type: "FeatureCollection", features }, null, 2)], { type: "application/geo+json" });
+    const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: "establishments.geojson" });
+    a.click(); URL.revokeObjectURL(a.href);
+  }
+
+  async function exportExcel() {
+    const XLSX = await import("xlsx");
+    const data = sorted.map(est => ({
+      WCO_Code: est.wco_code,
+      Name: est.name,
+      Type: est.type,
+      Barangay: est.barangay ?? "",
+      Latitude: est.latitude,
+      Longitude: est.longitude,
+      Status: est.is_active ? "Active" : "Inactive",
+      Last_Collection: lastCollection[est.id] ?? "",
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Establishments");
+    XLSX.writeFile(wb, "establishments.xlsx");
   }
 
   const active   = all.filter(e => e.is_active).length;
@@ -841,16 +1346,70 @@ function EstablishmentsContent() {
           <input type="checkbox" checked={showAll} onChange={e => setShowAll(e.target.checked)} />
           Show inactive
         </label>
-        <button
-          onClick={() => downloadCSV(sorted.map(e => ({
-            wco_code: e.wco_code, name: e.name, type: e.type,
-            barangay: e.barangay ?? "", latitude: e.latitude, longitude: e.longitude,
-            status: e.is_active ? "active" : "inactive",
-          })), "establishments.csv")}
-          style={{ ...ghostBtn, fontSize: 11, padding: "4px 10px" }}
-        >
-          Export CSV
-        </button>
+        {/* Export dropdown */}
+        <div style={{ position: "relative" }}>
+          <button
+            onClick={() => setExportOpen(v => !v)}
+            style={{ ...ghostBtn, fontSize: 11, padding: "4px 10px", display: "flex", alignItems: "center", gap: 4 }}
+          >
+            Export <span style={{ fontSize: 9, opacity: 0.6 }}>▾</span>
+          </button>
+          {exportOpen && (
+            <>
+              <div style={{ position: "fixed", inset: 0, zIndex: 98 }} onClick={() => setExportOpen(false)} />
+              <div style={{
+                position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 99,
+                background: "white", borderRadius: 10, border: "1px solid #e2e8f0",
+                boxShadow: "0 4px 16px rgba(0,0,0,0.10)", minWidth: 150, overflow: "hidden",
+              }}>
+                {[
+                  {
+                    label: "CSV",
+                    color: "#374151",
+                    action: () => {
+                      downloadCSV(sorted.map(e => ({
+                        wco_code: e.wco_code, name: e.name, type: e.type,
+                        barangay: e.barangay ?? "", latitude: e.latitude, longitude: e.longitude,
+                        status: e.is_active ? "active" : "inactive",
+                        last_collection: lastCollection[e.id] ?? "",
+                      })), "establishments.csv");
+                      setExportOpen(false);
+                    },
+                  },
+                  { label: "Excel (.xlsx)", color: "#065f46", action: () => { exportExcel(); setExportOpen(false); } },
+                  { label: "GeoJSON", color: "#1d4ed8", action: () => { exportGeoJSON(); setExportOpen(false); } },
+                ].map(({ label, color, action }) => (
+                  <button
+                    key={label}
+                    onClick={action}
+                    style={{
+                      display: "block", width: "100%", textAlign: "left",
+                      padding: "9px 14px", fontSize: 12, fontWeight: 600,
+                      color, background: "none", border: "none",
+                      cursor: "pointer", fontFamily: "inherit",
+                      borderBottom: label !== "GeoJSON" ? "1px solid #f1f5f9" : "none",
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.background = "#f8fafc")}
+                    onMouseLeave={e => (e.currentTarget.style.background = "none")}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+        <RoleGuard action="edit">
+          <input ref={estabFileRef} type="file" accept=".csv" style={{ display: "none" }} onChange={handleEstabCSV} />
+          <button
+            onClick={() => { setImportStatus(null); estabFileRef.current?.click(); }}
+            disabled={importing}
+            style={{ ...ghostBtn, fontSize: 11, padding: "4px 10px", opacity: importing ? 0.6 : 1 }}
+          >
+            {importing ? "Importing…" : "Import CSV"}
+          </button>
+        </RoleGuard>
+        {importStatus && <span style={{ fontSize: 11, color: importStatus.includes("imported") ? "#0f6e56" : "#dc2626", fontWeight: 600 }}>{importStatus}</span>}
         <span style={{ fontSize: 12, color: "#94a3b8" }}>{sorted.length} shown</span>
         {(search || typeFilter !== "all" || showAll || sortKey) && (
           <button
@@ -908,19 +1467,20 @@ function EstablishmentsContent() {
                     />
                   </th>
                   {([
-                    { label: "Code",        key: "wco_code"  },
-                    { label: "Name",        key: "name"      },
-                    { label: "Type",        key: "type"      },
-                    { label: "Barangay",    key: "barangay"  },
-                    { label: "Coordinates", key: null        },
-                    { label: "Status",      key: "status"    },
-                    { label: "Actions",     key: null        },
+                    { label: "Code",            key: "wco_code"  },
+                    { label: "Name",            key: "name"      },
+                    { label: "Type",            key: "type"      },
+                    { label: "Barangay",        key: "barangay"  },
+                    { label: "Coordinates",     key: null        },
+                    { label: "Last Collection", key: null        },
+                    { label: "Status",          key: "status"    },
+                    { label: "",                key: null        },
                   ] as { label: string; key: string | null }[]).map(({ label, key }) => (
                     <th
                       key={label}
                       onClick={key ? () => toggleSort(key) : undefined}
                       style={{
-                        ...(label === "Actions" ? { ...TH, width: 320, minWidth: 320 } : TH),
+                        ...TH,
                         cursor: key ? "pointer" : "default",
                         userSelect: "none",
                         whiteSpace: "nowrap",
@@ -941,7 +1501,7 @@ function EstablishmentsContent() {
               <tbody>
                 {sorted.length === 0 ? (
                   <tr>
-                    <td colSpan={8} style={{ padding: "40px 0", textAlign: "center", color: "#94a3b8" }}>
+                    <td colSpan={9} style={{ padding: "40px 0", textAlign: "center", color: "#94a3b8" }}>
                       No establishments match your filters.
                     </td>
                   </tr>
@@ -951,7 +1511,7 @@ function EstablishmentsContent() {
                       <input type="checkbox" checked={selected.has(e.id)} onChange={() => toggleSelect(e.id)} style={{ cursor: "pointer" }} />
                     </td>
                     <td style={{ ...TD, fontFamily: "monospace", fontWeight: 700, color: "#0f6e56", fontSize: 12 }}>{e.wco_code}</td>
-                    <td style={{ ...TD, fontWeight: 600, color: "#111827", maxWidth: 200 }}>
+                    <td style={{ ...TD, fontWeight: 600, color: "#111827", maxWidth: 220 }}>
                       <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.name}</div>
                     </td>
                     <td style={TD}><TypeBadge type={e.type} /></td>
@@ -959,70 +1519,19 @@ function EstablishmentsContent() {
                     <td style={{ ...TD, color: "#94a3b8", fontFamily: "monospace", fontSize: 11 }}>
                       {e.latitude.toFixed(4)}, {e.longitude.toFixed(4)}
                     </td>
+                    <td style={{ ...TD, color: "#64748b", fontSize: 11, whiteSpace: "nowrap" }}>
+                      {lastCollection[e.id]
+                        ? new Date(lastCollection[e.id]).toLocaleDateString("en-PH", { year: "numeric", month: "short", day: "numeric" })
+                        : <span style={{ color: "#d1d5db" }}>—</span>}
+                    </td>
                     <td style={TD}><StatusBadge active={e.is_active} /></td>
-                    <td style={{ ...TD, whiteSpace: "nowrap", width: 320, minWidth: 320 }}>
-                      <div style={{ display: "flex", gap: 6, flexWrap: "nowrap" }}>
-                        {/* WCO Records — all authenticated users */}
-                        <button onClick={() => setWcoModal(e)} style={{ ...ghostBtn, fontSize: 11, padding: "4px 10px", color: "#0f6e56", borderColor: "#86efac" }}>
-                          WCO Records
-                        </button>
-
-                        <RoleGuard action="edit">
-                          <button
-                            onClick={() => setModal(e)}
-                            style={{ ...ghostBtn, fontSize: 11, padding: "4px 10px" }}
-                          >
-                            Edit
-                          </button>
-
-                          {/* Deactivate with inline confirm / Activate directly */}
-                          {e.is_active ? (
-                            deactivateConf === e.id ? (
-                              <>
-                                <button
-                                  onClick={() => { toggleActive(e); setDeactivateConf(null); }}
-                                  style={{ ...ghostBtn, fontSize: 11, padding: "4px 10px", color: "#dc2626", borderColor: "#fca5a5" }}
-                                >
-                                  Confirm
-                                </button>
-                                <button
-                                  onClick={() => setDeactivateConf(null)}
-                                  style={{ ...ghostBtn, fontSize: 11, padding: "4px 10px" }}
-                                >
-                                  Cancel
-                                </button>
-                              </>
-                            ) : (
-                              <button
-                                onClick={() => setDeactivateConf(e.id)}
-                                style={{ ...ghostBtn, fontSize: 11, padding: "4px 10px", color: "#dc2626", borderColor: "#fca5a5" }}
-                              >
-                                Deactivate
-                              </button>
-                            )
-                          ) : (
-                            <button
-                              onClick={() => toggleActive(e)}
-                              style={{ ...ghostBtn, fontSize: 11, padding: "4px 10px", color: "#065f46", borderColor: "#86efac" }}
-                            >
-                              Activate
-                            </button>
-                          )}
-                        </RoleGuard>
-
-                        <RoleGuard action="delete">
-                          {deleteConf === e.id ? (
-                            <>
-                              <button onClick={() => deleteEst(e.id)} style={{ ...ghostBtn, fontSize: 11, padding: "4px 10px", color: "#dc2626", borderColor: "#fca5a5" }}>Confirm</button>
-                              <button onClick={() => setDeleteConf(null)} style={{ ...ghostBtn, fontSize: 11, padding: "4px 10px" }}>Cancel</button>
-                            </>
-                          ) : (
-                            <button onClick={() => setDeleteConf(e.id)} style={{ ...ghostBtn, fontSize: 11, padding: "4px 10px", color: "#dc2626", borderColor: "#fca5a5" }}>
-                              Delete
-                            </button>
-                          )}
-                        </RoleGuard>
-                      </div>
+                    <td style={{ ...TD, whiteSpace: "nowrap" }}>
+                      <button
+                        onClick={() => setDetailModal(e)}
+                        style={{ ...ghostBtn, fontSize: 11, padding: "4px 12px" }}
+                      >
+                        View Details
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -1041,8 +1550,27 @@ function EstablishmentsContent() {
         />
       )}
 
+      {detailModal && (
+        <EstablishmentDetailModal
+          establishment={detailModal}
+          onClose={() => setDetailModal(null)}
+          onEdit={e => { setDetailModal(null); setModal(e); }}
+          onViewWCO={e => setWcoModal(e)}
+          onViewTests={e => setQualityModal(e)}
+          onToggleActive={e => { toggleActive(e); setDetailModal(prev => prev ? { ...prev, is_active: !prev.is_active } : null); }}
+          onDelete={id => deleteEst(id)}
+        />
+      )}
+
       {wcoModal && (
-        <WCORecordsModal establishment={wcoModal} onClose={() => setWcoModal(null)} />
+        <WCORecordsModal
+          establishment={wcoModal}
+          onClose={() => setWcoModal(null)}
+          onRecordChanged={refreshLastCollection}
+        />
+      )}
+      {qualityModal && (
+        <QualityTestsModal establishment={qualityModal} onClose={() => setQualityModal(null)} />
       )}
     </PageShell>
   );
@@ -1057,6 +1585,7 @@ export default function EstablishmentsPage() {
           <EstablishmentsContent />
         </div>
       </div>
+      <Toaster />
     </ProtectedRoute>
   );
 }

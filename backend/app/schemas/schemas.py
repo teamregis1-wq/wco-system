@@ -155,3 +155,140 @@ class HotspotOut(BaseModel):
     category: str
     latitude: float
     longitude: float
+
+
+# --- WCO record update -------------------------------------------------------
+
+class WCORecordUpdate(BaseModel):
+    week_date: date | None = None
+    week_end_date: date | None = None
+    quantity_liters: float | None = None
+    notes: str | None = None
+
+
+# --- Weekly aggregates -------------------------------------------------------
+
+class WeeklyTotalOut(BaseModel):
+    week_date: str
+    total_liters: float
+    count: int
+
+
+# --- Route optimization ------------------------------------------------------
+
+class CollectionRouteRequest(BaseModel):
+    depot_lat: float
+    depot_lng: float
+    depot_name: str = "Collection Depot"
+    establishment_ids: list[int]
+
+
+class RouteStop(BaseModel):
+    stop_number: int
+    establishment_id: int
+    name: str
+    wco_code: str
+    barangay: str | None
+    avg_liters: float
+    lat: float
+    lng: float
+    leg_distance_km: float
+    cumulative_distance_km: float
+
+
+class CollectionRouteResponse(BaseModel):
+    depot_lat: float
+    depot_lng: float
+    depot_name: str
+    stops: list[RouteStop]
+    total_distance_km: float
+    total_establishments: int
+    estimated_duration_min: float
+    total_wco_liters: float
+
+
+# --- WCO summary / completeness / monthly -----------------------------------
+
+class WCOSummaryOut(BaseModel):
+    month_total_liters: float
+    ytd_total_liters: float
+    current_month: int
+    current_year: int
+    last_updated: str | None
+
+class MonthlyTotalOut(BaseModel):
+    year: int
+    month: int
+    total_liters: float
+    record_count: int
+
+class WCOCompletenessOut(BaseModel):
+    establishment_id: int
+    weeks_with_data: int
+    expected_weeks: int
+    completeness_pct: float
+    first_record_date: str | None
+    last_record_date: str | None
+
+# --- Candidate sites ---------------------------------------------------------
+
+class CandidateSiteOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+    latitude: float
+    longitude: float
+    rationale: str | None
+
+class CandidateSiteCreate(BaseModel):
+    name: str
+    latitude: float
+    longitude: float
+    rationale: str | None = None
+
+# --- Aggregate forecast ------------------------------------------------------
+
+class AggregateForecastPoint(BaseModel):
+    week_date: str
+    total_predicted_liters: float
+    establishment_count: int
+
+# --- Route with metadata -----------------------------------------------------
+
+class CollectionRouteResponseV2(CollectionRouteResponse):
+    algorithm: str
+    computation_time_ms: float
+    geometry: list[list[float]] | None = None   # [[lat, lng], ...] road path
+
+
+# --- Saved routes ------------------------------------------------------------
+
+class SavedRouteCreate(BaseModel):
+    name: str
+    depot_name: str
+    depot_lat: float
+    depot_lng: float
+    total_distance_km: float
+    total_establishments: int
+    total_wco_liters: float
+    estimated_duration_min: float
+    algorithm: str
+    stops_json: list | None = None
+    geometry_json: list | None = None
+
+
+class SavedRouteOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+    depot_name: str
+    depot_lat: float
+    depot_lng: float
+    total_distance_km: float
+    total_establishments: int
+    total_wco_liters: float
+    estimated_duration_min: float
+    algorithm: str
+    stops_json: list | None = None
+    geometry_json: list | None = None
+    created_at: datetime

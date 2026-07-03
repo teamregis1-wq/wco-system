@@ -142,3 +142,24 @@ class OptimizationResult(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
+
+
+class SavedRoute(Base):
+    """A named, saved collection route computed by the TSP engine."""
+    __tablename__ = "saved_routes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(255))
+    depot_name: Mapped[str] = mapped_column(String(255), default="Depot")
+    depot_lat: Mapped[float] = mapped_column(Float)
+    depot_lng: Mapped[float] = mapped_column(Float)
+    total_distance_km: Mapped[float] = mapped_column(Float)
+    total_establishments: Mapped[int] = mapped_column(Integer)
+    total_wco_liters: Mapped[float] = mapped_column(Float)
+    estimated_duration_min: Mapped[float] = mapped_column(Float)
+    algorithm: Mapped[str] = mapped_column(String(100))
+    stops_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    geometry_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )

@@ -16,6 +16,7 @@ from app.models.analysis import (
     RouteResult,
     SimulationRun,
     OptimizationResult,
+    SavedRoute,
 )
 
 __all__ = [
@@ -32,4 +33,5 @@ __all__ = [
     "RouteResult",
     "SimulationRun",
     "OptimizationResult",
+    "SavedRoute",
 ]

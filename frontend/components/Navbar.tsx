@@ -11,16 +11,31 @@ const ROLE_BADGE: Record<Role, { bg: string; color: string; label: string }> = {
 };
 
 const BASE_LINKS = [
-  { href: "/",               label: "Mapping",        adminOnly: false },
+  { href: "/",               label: "Map",            adminOnly: false },
+  { href: "/dashboard",      label: "Dashboard",      adminOnly: false },
   { href: "/establishments", label: "Establishments", adminOnly: false },
-  { href: "/biodiesel",      label: "Biodiesel RSM",  adminOnly: false },
+  { href: "/routes",         label: "Routes",         adminOnly: false },
   { href: "/admin",          label: "Admin",          adminOnly: true  },
 ];
 
 export default function Navbar() {
   const { user, signOut, can } = useAuth();
   const pathname = usePathname();
-  if (!user) return null;
+
+  // Public (unauthenticated) users only see the map — show a minimal brand bar
+  if (!user) {
+    return (
+      <nav style={S.nav}>
+        <span style={S.brand}>WCO System</span>
+        <span style={{ marginLeft: 8, fontSize: 11, color: "#94a3b8" }}>Batangas City · Public View</span>
+        <div style={{ marginLeft: "auto" }}>
+          <Link href="/login" style={{ fontSize: 12, color: "#0f6e56", textDecoration: "none", fontWeight: 600 }}>
+            Sign in
+          </Link>
+        </div>
+      </nav>
+    );
+  }
 
   const badge = ROLE_BADGE[user.role] ?? ROLE_BADGE.viewer;
   const links = BASE_LINKS.filter(l => !l.adminOnly || can("admin"));

@@ -3,6 +3,8 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import { getToken } from "@/lib/api";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RCTooltip, ResponsiveContainer } from "recharts";
+import { toast, Toaster } from "@/components/Toast";
 
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
@@ -233,7 +235,7 @@ function YieldDisplay({ value, confidence, predicting }: { value: number | null;
 
 export default function BiodieselDashboard() {
   const [surface, setSurface] = useState<SurfaceData | null>(null);
-  const [surfaceTab, setSurfaceTab] = useState<"temp_ratio" | "temp_catalyst">("temp_ratio");
+  const [surfaceTab, setSurfaceTab] = useState<"temp_ratio" | "temp_catalyst" | "contour" | "sensitivity">("temp_ratio");
   const [loadingError, setLoadingError] = useState<string | null>(null);
   const [surfaceLoading, setSurfaceLoading] = useState(true);
 
@@ -246,12 +248,81 @@ export default function BiodieselDashboard() {
   const [predicting, setPredicting] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [deleteConf,   setDeleteConf]   = useState<number | null>(null);
   const [selected,     setSelected]     = useState<Set<number>>(new Set());
   const [batchDelConf, setBatchDelConf] = useState(false);
   const [importing,    setImporting]    = useState(false);
   const [importStatus, setImportStatus] = useState<string | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const fileRef       = useRef<HTMLInputElement>(null);
+  const plotDivRef    = useRef<HTMLDivElement | null>(null);
+  const contourDivRef = useRef<HTMLDivElement | null>(null);
+
+  async function exportPlotPDF() {
+    const divRef = surfaceTab === "contour" ? contourDivRef.current : plotDivRef.current;
+    if (!divRef) return;
+    const labels: Record<string, string> = {
+      temp_ratio: "Temp × Molar Ratio (3D Surface)",
+      temp_catalyst: "Temp × Catalyst (3D Surface)",
+      contour: "Temp × Molar Ratio (2D Contour)",
+    };
+    const label = labels[surfaceTab] ?? surfaceTab;
+    const imgUrl = await (window as any).Plotly.toImage(divRef, { format: "png", width: 1200, height: 700 });
+
+    const container = document.createElement("div");
+    container.id = "__biodiesel-plot-print";
+    container.innerHTML = `
+      <h2 style="font-size:16px;font-weight:900;color:#111;margin:0 0 4px;font-family:system-ui,sans-serif">Biodiesel RSM – ${label}</h2>
+      <p style="font-size:12px;color:#64748b;margin:0 0 16px;font-family:system-ui,sans-serif">WCO Predictive Mapping System · Response Surface Methodology</p>
+      <img src="${imgUrl}" style="max-width:100%;width:100%;border-radius:8px">
+    `;
+    document.body.appendChild(container);
+
+    const style = document.createElement("style");
+    style.id = "__biodiesel-plot-print-style";
+    style.textContent = `
+      @media print {
+        @page { margin: 12mm; size: A4 landscape; }
+        body * { visibility: hidden !important; }
+        #__biodiesel-plot-print, #__biodiesel-plot-print * { visibility: visible !important; }
+        #__biodiesel-plot-print {
+          position: fixed !important;
+          inset: 0 !important;
+          padding: 20px !important;
+          background: white !important;
+          width: 100vw !important;
+        }
+      }
+    `;
+    document.head.appendChild(style);
+    window.print();
+    setTimeout(() => {
+      document.getElementById("__biodiesel-plot-print")?.remove();
+      document.getElementById("__biodiesel-plot-print-style")?.remove();
+    }, 1500);
+  }
+
+  function exportSensitivityPDF() {
+    const style = document.createElement("style");
+    style.id = "__sensitivity-print-style";
+    style.textContent = `
+      @media print {
+        @page { margin: 12mm; size: A4 portrait; }
+        body * { visibility: hidden !important; }
+        #sensitivity-print-area, #sensitivity-print-area * { visibility: visible !important; }
+        #sensitivity-print-area {
+          position: fixed !important;
+          inset: 0 !important;
+          padding: 16px 24px !important;
+          background: white !important;
+          width: 100vw !important;
+          font-family: system-ui, sans-serif !important;
+        }
+        .sensitivity-print-header { display: block !important; }
+      }
+    `;
+    document.head.appendChild(style);
+    window.print();
+    setTimeout(() => document.getElementById("__sensitivity-print-style")?.remove(), 1500);
+  }
 
   function refreshSurface() {
     setSurfaceLoading(true);
@@ -261,24 +332,12 @@ export default function BiodieselDashboard() {
       .finally(() => setSurfaceLoading(false));
   }
 
-  async function deleteRun(id: number) {
-    try {
-      await apiFetch(`/biodiesel/simulations/${id}`, { method: "DELETE" });
-      setSurface(prev => prev
-        ? { ...prev, actual_runs: prev.actual_runs.filter(r => r.id !== id) }
-        : prev
-      );
-      setDeleteConf(null);
-      invalidateAndRefresh();
-    } catch (e) { alert(String(e)); }
-  }
-
   function invalidateAndRefresh() {
-    // Surface will retrain on next fetch since backend cleared cache
     setTimeout(refreshSurface, 300);
   }
 
   async function batchDeleteRuns() {
+    const count = selected.size;
     for (const id of selected) {
       try { await apiFetch(`/biodiesel/simulations/${id}`, { method: "DELETE" }); } catch { /* skip */ }
     }
@@ -287,6 +346,7 @@ export default function BiodieselDashboard() {
       : prev
     );
     setSelected(new Set()); setBatchDelConf(false);
+    toast(`${count} run${count !== 1 ? "s" : ""} deleted.`, "info");
     setTimeout(refreshSurface, 300);
   }
 
@@ -308,7 +368,10 @@ export default function BiodieselDashboard() {
     }
     setImporting(false);
     setImportStatus(`${ok} row${ok !== 1 ? "s" : ""} imported${skip ? `, ${skip} skipped` : ""}.`);
-    if (ok > 0) refreshSurface();
+    if (ok > 0) {
+      toast(`${ok} row${ok !== 1 ? "s" : ""} imported.`);
+      refreshSurface();
+    }
   }
 
 
@@ -344,7 +407,9 @@ export default function BiodieselDashboard() {
   useEffect(() => { runPredict(temp, ratio, catalyst); }, [temp, ratio, catalyst, runPredict]);
 
 
-  const slice = surface ? surface[surfaceTab] : null;
+  const slice = surface
+    ? surface[surfaceTab as "temp_ratio" | "temp_catalyst"] ?? null
+    : null;
   const opt = surface?.optimum;
   const runs = surface?.actual_runs ?? [];
 
@@ -369,6 +434,37 @@ export default function BiodieselDashboard() {
         } as Plotly.Data] : []),
       ]
     : [];
+
+  const contourSlice = surface ? surface[surfaceTab === "contour" ? "temp_ratio" : surfaceTab as "temp_ratio" | "temp_catalyst"] : null;
+  const contourTraces: Plotly.Data[] = contourSlice ? [{
+    type: "contour" as const,
+    x: contourSlice.x,
+    y: contourSlice.y,
+    z: contourSlice.z,
+    colorscale: "Viridis",
+    contours: { showlabels: true, labelfont: { size: 10, color: "white" } },
+    colorbar: { title: "Yield (%)", titlefont: { size: 11 }, thickness: 14 },
+    name: "RSM Contour",
+  } as Plotly.Data] : [];
+
+  const sensitivityData = opt && surface ? (() => {
+    const tr = surface.temp_ratio;
+    const tc = surface.temp_catalyst;
+
+    const ratioIdx = tr.y.reduce((best, v, i) => Math.abs(v - opt.molar_ratio) < Math.abs(tr.y[best] - opt.molar_ratio) ? i : best, 0);
+    const tempYields = tr.z.map(row => row[ratioIdx]);
+    const tempData = tr.x.map((t, i) => ({ variable: `${t}°C`, temp: t, yield: Math.round(tempYields[i] * 10) / 10 }));
+
+    const tempIdx = tr.x.reduce((best, v, i) => Math.abs(v - opt.temperature_c) < Math.abs(tr.x[best] - opt.temperature_c) ? i : best, 0);
+    const ratioYields = tr.z[tempIdx];
+    const ratioData = tr.y.map((r, i) => ({ variable: `${r}:1`, ratio: r, yield: Math.round(ratioYields[i] * 10) / 10 }));
+
+    const tempIdx2 = tc.x.reduce((best, v, i) => Math.abs(v - opt.temperature_c) < Math.abs(tc.x[best] - opt.temperature_c) ? i : best, 0);
+    const catYields = tc.z[tempIdx2];
+    const catData = tc.y.map((c, i) => ({ variable: `${c}%`, cat: c, yield: Math.round(catYields[i] * 10) / 10 }));
+
+    return { tempData, ratioData, catData };
+  })() : null;
 
   return (
     <div style={{ fontFamily: "system-ui,-apple-system,sans-serif", minHeight: "100%", background: "#f3f4f6", display: "flex", flexDirection: "column" }}>
@@ -431,7 +527,12 @@ export default function BiodieselDashboard() {
           <div style={S.card}>
             {/* Tab bar */}
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 16 }}>
-              {([["temp_ratio", "Temp × Molar Ratio"], ["temp_catalyst", "Temp × Catalyst"]] as const).map(([tab, label]) => (
+              {([
+                ["temp_ratio", "Temp × Molar Ratio"],
+                ["temp_catalyst", "Temp × Catalyst"],
+                ["contour", "2D Contour"],
+                ["sensitivity", "Sensitivity Analysis"],
+              ] as const).map(([tab, label]) => (
                 <button key={tab} onClick={() => setSurfaceTab(tab)} style={{
                   padding: "6px 16px", borderRadius: 99, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700,
                   transition: "all 0.2s ease",
@@ -442,7 +543,21 @@ export default function BiodieselDashboard() {
                   {label}
                 </button>
               ))}
-              {slice && <span style={{ marginLeft: "auto", fontSize: 11, color: C.muted, fontStyle: "italic" }}>{slice.fixed_label}</span>}
+              {slice && surfaceTab !== "contour" && surfaceTab !== "sensitivity" && (
+                <span style={{ fontSize: 11, color: C.muted, fontStyle: "italic" }}>{slice.fixed_label}</span>
+              )}
+              <div style={{ marginLeft: "auto" }}>
+                {!surfaceLoading && surfaceTab !== "sensitivity" && (slice || surfaceTab === "contour") && (
+                  <button onClick={exportPlotPDF} style={{ fontSize: 11, padding: "5px 12px", borderRadius: 8, border: "1px solid #e2e8f0", background: "white", cursor: "pointer", color: "#374151", fontWeight: 600, fontFamily: "inherit" }}>
+                    Export PDF
+                  </button>
+                )}
+                {!surfaceLoading && surfaceTab === "sensitivity" && sensitivityData && (
+                  <button onClick={exportSensitivityPDF} style={{ fontSize: 11, padding: "5px 12px", borderRadius: 8, border: "1px solid #e2e8f0", background: "white", cursor: "pointer", color: "#374151", fontWeight: 600, fontFamily: "inherit" }}>
+                    Export PDF
+                  </button>
+                )}
+              </div>
             </div>
 
             {surfaceLoading ? (
@@ -450,6 +565,56 @@ export default function BiodieselDashboard() {
                 <div style={{ width: 36, height: 36, border: `3px solid ${C.green}`, borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
                 <span style={{ fontSize: 13 }}>Building RSM surface…</span>
               </div>
+            ) : surfaceTab === "sensitivity" ? (
+              sensitivityData ? (
+                <div id="sensitivity-print-area" style={{ display: "flex", flexDirection: "column", gap: 16, padding: "8px 0" }}>
+                  <div className="sensitivity-print-header" style={{ display: "none", marginBottom: 8 }}>
+                    <div style={{ fontSize: 16, fontWeight: 900, color: "#111827", marginBottom: 2 }}>
+                      Biodiesel RSM — Sensitivity Analysis
+                    </div>
+                    <div style={{ fontSize: 12, color: "#64748b" }}>
+                      WCO Predictive Mapping System · Optimal: {opt?.temperature_c}°C, {opt?.molar_ratio}:1, {opt?.catalyst_loading_pct}% catalyst
+                    </div>
+                  </div>
+                  {[
+                    { label: "Temperature Sensitivity", data: sensitivityData.tempData, xKey: "temp", xLabel: "Temperature (°C)", color: "#0f6e56" },
+                    { label: "Molar Ratio Sensitivity", data: sensitivityData.ratioData, xKey: "ratio", xLabel: "Molar Ratio (:1)", color: "#0369a1" },
+                    { label: "Catalyst Loading Sensitivity", data: sensitivityData.catData, xKey: "cat", xLabel: "Catalyst (%)", color: "#7c3aed" },
+                  ].map(({ label, data, xKey, xLabel, color }) => (
+                    <div key={label}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: C.muted, marginBottom: 6 }}>{label}</div>
+                      <ResponsiveContainer width="100%" height={120}>
+                        <LineChart data={data} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                          <XAxis dataKey={xKey} tick={{ fontSize: 9, fill: "#94a3b8" }} tickLine={false} axisLine={false} label={{ value: xLabel, position: "insideBottomRight", offset: -5, fontSize: 9, fill: "#94a3b8" }} />
+                          <YAxis tick={{ fontSize: 9, fill: "#94a3b8" }} tickLine={false} axisLine={false} tickFormatter={(v: number) => `${v}%`} width={36} domain={["auto", "auto"]} />
+                          <RCTooltip formatter={(v: number) => [`${v.toFixed(1)}%`, "Yield"]} contentStyle={{ fontSize: 11, borderRadius: 8 }} />
+                          <Line type="monotone" dataKey="yield" stroke={color} strokeWidth={2.5} dot={{ r: 2, fill: color }} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  ))}
+                </div>
+              ) : <div style={{ height: 440, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 13 }}>No surface data.</div>
+            ) : surfaceTab === "contour" ? (
+              contourSlice ? (
+                <Plot
+                  data={contourTraces}
+                  layout={{
+                    autosize: true, height: 440,
+                    margin: { t: 10, r: 30, b: 50, l: 50 },
+                    xaxis: { title: { text: contourSlice.x_label, font: { size: 11 } }, tickfont: { size: 10 } },
+                    yaxis: { title: { text: contourSlice.y_label, font: { size: 11 } }, tickfont: { size: 10 } },
+                    paper_bgcolor: "transparent",
+                    plot_bgcolor: "#fafafa",
+                    font: { family: "system-ui, sans-serif" },
+                  }}
+                  config={{ responsive: true, displayModeBar: false }}
+                  style={{ width: "100%" }}
+                  onInitialized={(_, div) => { contourDivRef.current = div as HTMLDivElement; }}
+                  onUpdate={(_, div) => { contourDivRef.current = div as HTMLDivElement; }}
+                />
+              ) : <div style={{ height: 440, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 13 }}>No surface data.</div>
             ) : slice ? (
               <Plot
                 data={plotTraces}
@@ -459,7 +624,7 @@ export default function BiodieselDashboard() {
                   scene: {
                     xaxis: { title: { text: slice.x_label, font: { size: 11 } }, tickfont: { size: 10 } },
                     yaxis: { title: { text: slice.y_label, font: { size: 11 } }, tickfont: { size: 10 } },
-                    zaxis: { title: { text: "Yield (%)", font: { size: 11 } }, tickfont: { size: 10 } },    
+                    zaxis: { title: { text: "Yield (%)", font: { size: 11 } }, tickfont: { size: 10 } },
                     bgcolor: "#fafafa",
                     camera: { eye: { x: 1.6, y: 1.6, z: 0.9 } },
                   },
@@ -470,6 +635,8 @@ export default function BiodieselDashboard() {
                 }}
                 config={{ responsive: true, displayModeBar: false, scrollZoom: true }}
                 style={{ width: "100%" }}
+                onInitialized={(_, div) => { plotDivRef.current = div as HTMLDivElement; }}
+                onUpdate={(_, div) => { plotDivRef.current = div as HTMLDivElement; }}
               />
             ) : (
               <div style={{ height: 440, display: "flex", alignItems: "center", justifyContent: "center", color: C.muted, fontSize: 13 }}>
@@ -541,7 +708,7 @@ export default function BiodieselDashboard() {
                           style={{ cursor: "pointer" }}
                         />
                       </th>
-                      {["#", "Temperature (°C)", "Molar Ratio (:1)", "Catalyst (%)", "Yield (%)", "Conv. Eff. (%)", ""].map(h => (
+                      {["#", "Temperature (°C)", "Molar Ratio (:1)", "Catalyst (%)", "Yield (%)", "Conv. Eff. (%)"].map(h => (
                         <th key={h} style={{ padding: "10px 16px", textAlign: "left", fontSize: 11, fontWeight: 700, color: C.muted, letterSpacing: "0.04em", textTransform: "uppercase", borderBottom: "1px solid #e5e7eb", whiteSpace: "nowrap" }}>
                           {h}
                         </th>
@@ -552,7 +719,6 @@ export default function BiodieselDashboard() {
                     {runs.map((r, i) => {
                       const maxYield = Math.max(...runs.map(x => x.yield_pct));
                       const isMax = r.yield_pct === maxYield;
-                      const isDeleting = deleteConf === r.id;
                       return (
                         <tr key={r.id} style={{ background: selected.has(r.id) ? "#eff6ff" : isMax ? "#f0fdf4" : i % 2 === 0 ? "white" : "#fafafa", transition: "background 0.15s" }}>
                           <td style={{ padding: "9px 12px" }}>
@@ -570,16 +736,6 @@ export default function BiodieselDashboard() {
                           <td style={{ padding: "9px 16px", fontVariantNumeric: "tabular-nums", color: C.muted }}>
                             {r.conversion_efficiency != null ? r.conversion_efficiency.toFixed(2) : "—"}
                           </td>
-                          <td style={{ padding: "9px 16px", whiteSpace: "nowrap" }}>
-                            {isDeleting ? (
-                              <div style={{ display: "flex", gap: 4 }}>
-                                <button onClick={() => deleteRun(r.id)} style={{ fontSize: 11, padding: "3px 9px", borderRadius: 6, border: "none", background: "#fee2e2", color: "#dc2626", fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Confirm</button>
-                                <button onClick={() => setDeleteConf(null)} style={{ fontSize: 11, padding: "3px 9px", borderRadius: 6, border: "1px solid #e5e7eb", background: "white", color: "#6b7280", cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
-                              </div>
-                            ) : (
-                              <button onClick={() => setDeleteConf(r.id)} style={{ fontSize: 11, padding: "3px 9px", borderRadius: 6, border: "1px solid #fca5a5", background: "white", color: "#dc2626", cursor: "pointer", fontFamily: "inherit" }}>Delete</button>
-                            )}
-                          </td>
                         </tr>
                       );
                     })}
@@ -595,6 +751,7 @@ export default function BiodieselDashboard() {
       </div>
 
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      <Toaster />
     </div>
   );
 }
@@ -625,6 +782,7 @@ function AddRunForm({ onAdded }: { onAdded: () => void }) {
         }),
       });
       setTemp(""); setRatio(""); setCat(""); setYld(""); setConv(""); setNotes("");
+      toast("Run saved.");
       setOpen(false); onAdded();
     } catch (err) { setError(String(err).replace("Error: ", "")); }
     finally { setBusy(false); }

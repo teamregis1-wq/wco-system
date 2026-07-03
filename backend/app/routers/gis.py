@@ -29,7 +29,6 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import get_current_user
 from app.models.establishment import Establishment
 from app.models.wco import WCOGenerationRecord
 
@@ -162,7 +161,6 @@ def _kde_grid(
 @router.get("/establishments")
 def gis_establishments(
     db: Session = Depends(get_db),
-    _: str = Depends(get_current_user),
 ):
     """All active establishments as GeoJSON-friendly points."""
     rows = db.scalars(
@@ -186,7 +184,6 @@ def gis_establishments(
 def gis_hotspots(
     band: float = Query(_WEIGHT_BAND_DEG, description="Spatial-weight bandwidth in degrees"),
     db: Session = Depends(get_db),
-    _: str = Depends(get_current_user),
 ):
     """Getis-Ord Gi* hotspot scores per establishment.
 
@@ -267,7 +264,6 @@ def gis_hotspots(
 def gis_kde(
     steps: int = Query(60, ge=20, le=100, description="Grid resolution (steps × steps)"),
     db: Session = Depends(get_db),
-    _: str = Depends(get_current_user),
 ):
     """Volume-weighted KDE density grid for the heatmap overlay.
 
@@ -366,7 +362,6 @@ def gis_kde(
 @router.get("/summary")
 def gis_summary(
     db: Session = Depends(get_db),
-    _: str = Depends(get_current_user),
 ):
     """City-wide WCO aggregate statistics.
 

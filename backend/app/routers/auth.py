@@ -1,7 +1,7 @@
 """Authentication routes: register, login, user management (admin)."""
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordRequestForm
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select, func, desc
 from sqlalchemy.orm import Session
 
@@ -22,6 +22,11 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 class RoleUpdate(BaseModel):
     role: str
+
+
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8)
 
 
 @router.post("/register", response_model=UserOut, status_code=201)
@@ -53,6 +58,19 @@ def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get
 @router.get("/me", response_model=UserOut)
 def me(current_user: User = Depends(get_current_user)):
     return current_user
+
+
+@router.patch("/me/password")
+def change_password(
+    payload: PasswordChange,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if not verify_password(payload.current_password, current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Current password is incorrect.")
+    current_user.hashed_password = hash_password(payload.new_password)
+    db.commit()
+    return {"message": "Password updated successfully."}
 
 
 # ── Admin-only user management ─────────────────────────────────────────────────

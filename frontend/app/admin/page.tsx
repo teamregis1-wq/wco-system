@@ -6,6 +6,7 @@ import Navbar from "@/components/Navbar";
 import PageShell, { card as cardStyle, primaryBtn as primaryBtnStyle, ghostBtn as ghostBtnStyle, input as inputStyle, label as labelStyle } from "@/components/PageShell";
 import { getToken } from "@/lib/api";
 import { useAuth, type Role } from "@/lib/auth-context";
+import { toast, Toaster } from "@/components/Toast";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -127,6 +128,7 @@ function AddUserModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
         method: "POST",
         body: JSON.stringify({ email, full_name: name, password, role }),
       });
+      toast("User created.");
       onCreated();
       onClose();
     } catch (err) {
@@ -210,9 +212,10 @@ function LSTMTrainingPanel() {
     setStarting(true);
     try {
       await apiFetch("/forecast/train", { method: "POST" });
+      toast("LSTM training started.", "info");
       await fetchStatus();
       pollRef.current = setInterval(fetchStatus, 3000);
-    } catch (e) { alert(String(e)); }
+    } catch (e) { toast(String(e).replace("Error: ", ""), "error"); }
     finally { setStarting(false); }
   }
 
@@ -303,6 +306,7 @@ function AdminDashboard() {
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
   const [auditLogs, setAuditLogs] = useState<AuditEntry[]>([]);
   const [auditFilter, setAuditFilter] = useState("");
+  const [detailsEntry, setDetailsEntry] = useState<AuditEntry | null>(null);
 
   const loadAudit = useCallback(async (filter = "") => {
     const path = filter ? `/auth/audit-logs?resource_type=${filter}` : "/auth/audit-logs";
@@ -331,8 +335,9 @@ function AdminDashboard() {
         body: JSON.stringify({ role }),
       });
       setUsers(prev => prev.map(u => u.id === userId ? updated : u));
+      toast(`Role updated to ${role}.`, "info");
     } catch (e) {
-      alert(String(e));
+      toast(String(e).replace("Error: ", ""), "error");
     } finally {
       setRoleLoading(null);
     }
@@ -343,8 +348,9 @@ function AdminDashboard() {
       await apiFetch(`/auth/users/${userId}`, { method: "DELETE" });
       setUsers(prev => prev.filter(u => u.id !== userId));
       setDeleteConfirm(null);
+      toast("User deleted.", "info");
     } catch (e) {
-      alert(String(e));
+      toast(String(e).replace("Error: ", ""), "error");
     }
   }
 
@@ -522,7 +528,19 @@ function AdminDashboard() {
                       </td>
                       <td style={{ padding: "8px 12px", fontSize: 12, color: "#94a3b8" }}>{a.resource_id ?? "—"}</td>
                       <td style={{ padding: "8px 12px", fontSize: 12, color: "#4a5568", maxWidth: 220 }}>
-                        <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.details ?? "—"}</div>
+                        {a.details && a.details.length > 55 ? (
+                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{a.details}</div>
+                            <button
+                              onClick={() => setDetailsEntry(a)}
+                              style={{ fontSize: 10, padding: "2px 8px", borderRadius: 6, border: "1px solid #e2e8f0", background: "white", cursor: "pointer", color: "#374151", whiteSpace: "nowrap", fontFamily: "inherit", flexShrink: 0, fontWeight: 600 }}
+                            >
+                              View
+                            </button>
+                          </div>
+                        ) : (
+                          <div>{a.details ?? "—"}</div>
+                        )}
                       </td>
                     </tr>
                   );
@@ -535,6 +553,40 @@ function AdminDashboard() {
 
       {showAdd && (
         <AddUserModal onClose={() => setShowAdd(false)} onCreated={load} />
+      )}
+
+      {detailsEntry && (
+        <div style={S.modalOverlay} onClick={() => setDetailsEntry(null)}>
+          <div style={{ ...S.modal, width: 480 }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 800, color: "#1a202c" }}>Audit Entry #{detailsEntry.id}</div>
+                <div style={{ fontSize: 11, color: "#a0aec0", marginTop: 2 }}>
+                  {new Date(detailsEntry.created_at).toLocaleString("en-PH", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                </div>
+              </div>
+              <button onClick={() => setDetailsEntry(null)} style={S.iconBtn}>✕</button>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, fontSize: 13 }}>
+              {[
+                { label: "User",     value: detailsEntry.user_email },
+                { label: "Action",   value: detailsEntry.action },
+                { label: "Resource", value: `${{ establishment: "Establishment", wco_record: "WCO Record", quality_test: "Quality Test", simulation_run: "Simulation Run", lstm_training: "LSTM Training", user: "User" }[detailsEntry.resource_type] ?? detailsEntry.resource_type}${detailsEntry.resource_id != null ? ` #${detailsEntry.resource_id}` : ""}` },
+              ].map(({ label, value }) => (
+                <div key={label} style={{ display: "flex", gap: 12 }}>
+                  <span style={{ width: 72, flexShrink: 0, color: "#a0aec0", fontWeight: 600 }}>{label}</span>
+                  <span style={{ color: "#1a202c" }}>{value}</span>
+                </div>
+              ))}
+              <div>
+                <div style={{ color: "#a0aec0", fontWeight: 600, marginBottom: 6 }}>Details</div>
+                <div style={{ background: "#f8fafc", borderRadius: 10, padding: "12px 14px", fontSize: 12, color: "#374151", wordBreak: "break-word", whiteSpace: "pre-wrap", maxHeight: 220, overflowY: "auto", border: "1px solid #e2e8f0", lineHeight: 1.6 }}>
+                  {detailsEntry.details ?? "—"}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       </div>
@@ -551,6 +603,7 @@ export default function AdminPage() {
           <AdminDashboard />
         </div>
       </div>
+      <Toaster />
     </ProtectedRoute>
   );
 }

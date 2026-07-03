@@ -11,7 +11,7 @@
 
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import {
-  MapContainer, TileLayer, CircleMarker, ImageOverlay, Tooltip, useMap,
+  MapContainer, TileLayer, CircleMarker, ImageOverlay, Tooltip, useMap, useMapEvents,
 } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import { getToken } from "@/lib/api";
@@ -179,14 +179,13 @@ function kdeToDataUrl(grid: number[][]): string {
 // ── API helpers ───────────────────────────────────────────────────────────────
 
 async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${getToken()}`,
-      ...(options.headers ?? {}),
-    },
-  });
+  const token = getToken();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(options.headers as Record<string, string> ?? {}),
+  };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(`${BASE}${path}`, { ...options, headers });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.detail ?? `HTTP ${res.status}`);
@@ -250,7 +249,6 @@ export default function WCOMap() {
   const [kde,            setKde]            = useState<KdeData | null>(null);
   const [summary,        setSummary]        = useState<GisSummary | null>(null);
   const [establishments, setEstablishments] = useState<Establishment[]>([]);
-
   const [kdeImageUrl, setKdeImageUrl] = useState<string>("");
   const [showKde,     setShowKde]     = useState(false);
   const [loading,     setLoading]     = useState(true);
@@ -263,6 +261,7 @@ export default function WCOMap() {
   const [forecastError, setForecastError] = useState<string | null>(null);
   const [sidebarOpen,  setSidebarOpen]  = useState(true);
   const [resetTick,    setResetTick]    = useState(0);
+  const [refreshKey,   setRefreshKey]   = useState(0);
 
   const markers = useMemo<MarkerData[]>(() => {
     const hsMap = new Map(hotspots.map(h => [h.establishment_id, h]));
@@ -278,8 +277,10 @@ export default function WCOMap() {
     [establishments]
   );
 
-  // Fetch all GIS data in parallel
+  // Fetch all GIS data in parallel — re-runs when refreshKey changes
   useEffect(() => {
+    setLoading(true);
+    setError(null);
     Promise.all([
       apiFetch<GiHotspot[]>("/gis/hotspots"),
       apiFetch<KdeData>("/gis/kde?steps=60"),
@@ -294,7 +295,7 @@ export default function WCOMap() {
       })
       .catch(e => setError(String(e)))
       .finally(() => setLoading(false));
-  }, []);
+  }, [refreshKey]);
 
   // Render KDE to canvas when data arrives
   useEffect(() => {
@@ -304,13 +305,17 @@ export default function WCOMap() {
 
   async function loadForecast(id: number) {
     setSelectedId(id);
+    if (!getToken()) {
+      setForecastError("Sign in to view forecasts and historical records.");
+      return;
+    }
     setForecasting(true);
     setForecast([]);
     setHistorical([]);
     setForecastError(null);
     try {
       const [res, hist] = await Promise.all([
-        apiFetch<{ points: ForecastPoint[] }>(`/forecast/${id}?horizon_weeks=12`),
+        apiFetch<{ points: ForecastPoint[] }>(`/forecast/${id}?horizon_weeks=13`),
         apiFetch<{ week_date: string; quantity_liters: number }[]>(`/wco/records?establishment_id=${id}`),
       ]);
       setForecast(res.points);
@@ -325,10 +330,33 @@ export default function WCOMap() {
   const kdeOverlayBounds: [[number, number], [number, number]] | null =
     kde ? [[kde.lat_min, kde.lng_min], [kde.lat_max, kde.lng_max]] : null;
 
+  function exportMapPDF() {
+    const style = document.createElement("style");
+    style.id = "__map-print-style";
+    style.textContent = `
+      @media print {
+        @page { margin: 0; size: A4 landscape; }
+        body * { visibility: hidden !important; }
+        #__map-print-root,
+        #__map-print-root * { visibility: visible !important; }
+        #__map-print-root {
+          position: fixed !important;
+          inset: 0 !important;
+          width: 100vw !important;
+          height: 100vh !important;
+          z-index: 99999 !important;
+        }
+      }
+    `;
+    document.head.appendChild(style);
+    window.print();
+    setTimeout(() => document.getElementById("__map-print-style")?.remove(), 1500);
+  }
+
   return (
     <div style={{ display: "flex", height: "100%", minHeight: 0 }}>
       {/* ── Map ──────────────────────────────────────────────────────────── */}
-      <div style={{ flex: 1, position: "relative", minWidth: 0 }}>
+      <div id="__map-print-root" style={{ flex: 1, position: "relative", minWidth: 0 }}>
         {loading && (
           <div style={{
             position: "absolute", inset: 0, zIndex: 9999,
@@ -362,15 +390,19 @@ export default function WCOMap() {
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
 
-          {/* KDE heatmap overlay */}
+          {/* KDE heatmap overlay — non-interactive so it doesn't block marker clicks */}
           {showKde && kdeImageUrl && kdeOverlayBounds && (
             <ImageOverlay
               url={kdeImageUrl}
               bounds={kdeOverlayBounds}
-              opacity={0.65}
+              opacity={0.6}
               zIndex={400}
+              interactive={false}
             />
           )}
+
+          {/* Click anywhere on the map to select the nearest establishment */}
+          <MapClickHandler markers={markers} onSelect={loadForecast} />
 
           {/* All establishment markers — Gi*-scored where data exists */}
           {markers.map(m => {
@@ -440,34 +472,44 @@ export default function WCOMap() {
           <ResetViewControl hotspots={hotspots} tick={resetTick} />
         </MapContainer>
 
-        {/* Reset view button */}
+        {/* Bottom-left button row — flex so buttons never overlap */}
+        <div style={{
+          position: "absolute", bottom: 24, left: 14, zIndex: 500,
+          display: "flex", gap: 8, flexWrap: "wrap",
+        }}>
+          <button
+            onClick={() => { setResetTick(t => t + 1); setSelectedId(null); setForecast([]); setHistorical([]); setForecastError(null); }}
+            style={mapBtn}
+          >
+            ⌖ Reset View
+          </button>
+          <button
+            onClick={() => setShowKde(v => !v)}
+            style={{ ...mapBtn, background: showKde ? "#0f6e56" : "white", color: showKde ? "white" : "#333", border: showKde ? "1px solid #0f6e56" : "1px solid #ccc" }}
+          >
+            {showKde ? "▧ KDE On" : "▨ Show Heatmap"}
+          </button>
+          <button
+            onClick={() => setRefreshKey(k => k + 1)}
+            title="Re-fetch hotspot and KDE data to reflect new records"
+            style={mapBtn}
+          >
+            ↻ Refresh
+          </button>
+        </div>
+
+        {/* Export PDF button */}
         <button
-          onClick={() => { setResetTick(t => t + 1); setSelectedId(null); setForecast([]); setHistorical([]); setForecastError(null); }}
+          onClick={exportMapPDF}
           style={{
-            position: "absolute", bottom: 24, left: 14, zIndex: 500,
+            position: "absolute", bottom: 24, right: 14, zIndex: 500,
             padding: "7px 14px", borderRadius: 10, border: "1px solid #ccc",
             background: "white", color: "#333",
             fontSize: 12, fontWeight: 700, cursor: "pointer",
             boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
           }}
         >
-          ⌖ Reset View
-        </button>
-
-        {/* KDE toggle button */}
-        <button
-          onClick={() => setShowKde(v => !v)}
-          style={{
-            position: "absolute", bottom: 24, left: 140, zIndex: 500,
-            padding: "7px 14px", borderRadius: 10, border: "1px solid #ccc",
-            background: showKde ? "#0f6e56" : "white",
-            color: showKde ? "white" : "#333",
-            fontSize: 12, fontWeight: 700, cursor: "pointer",
-            boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
-            transition: "all 0.2s ease",
-          }}
-        >
-          {showKde ? "▧ KDE On" : "▨ Show KDE Heatmap"}
+          Export PDF
         </button>
 
         {/* Sidebar toggle — lives in map div so it's always visible */}
@@ -581,7 +623,7 @@ export default function WCOMap() {
 
           {!selectedId && (
             <div style={{ fontSize: 12, color: "#a0aec0" }}>
-              Select an establishment to fly to its location and view its 12-week WCO forecast.
+              Select an establishment or click a marker on the map to view its 3-month WCO forecast.
             </div>
           )}
           {forecasting && (
@@ -652,6 +694,26 @@ export default function WCOMap() {
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
+// ── MapClickHandler — click any point to select nearest establishment ─────────
+
+function MapClickHandler({ markers, onSelect }: { markers: MarkerData[]; onSelect: (id: number) => void }) {
+  useMapEvents({
+    click(e) {
+      if (!markers.length) return;
+      const { lat, lng } = e.latlng;
+      let nearest = markers[0];
+      let minDist = Infinity;
+      for (const m of markers) {
+        const d = (m.latitude - lat) ** 2 + (m.longitude - lng) ** 2;
+        if (d < minDist) { minDist = d; nearest = m; }
+      }
+      // Trigger only when click is within ~800 m of a marker (≈0.008°)
+      if (minDist < 0.008 ** 2) onSelect(nearest.id);
+    },
+  });
+  return null;
+}
+
 function StatBox({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
     <div style={{
@@ -666,6 +728,14 @@ function StatBox({ label, value, accent }: { label: string; value: string; accen
 }
 
 // ── Panel styles ──────────────────────────────────────────────────────────────
+
+const mapBtn: React.CSSProperties = {
+  padding: "7px 14px", borderRadius: 10, border: "1px solid #ccc",
+  background: "white", color: "#333",
+  fontSize: 12, fontWeight: 700, cursor: "pointer",
+  boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+  whiteSpace: "nowrap",
+};
 
 const P: Record<string, React.CSSProperties> = {
   section: {

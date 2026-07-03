@@ -21,9 +21,10 @@ ARTIFACT_DIR   = Path(__file__).parent / "model_artifacts"
 WEIGHTS_PATH   = ARTIFACT_DIR / "lstm_wco.pt"
 SCALER_PATH    = ARTIFACT_DIR / "scaler.npz"
 
-SEQUENCE_LENGTH = 12
-HIDDEN_SIZE     = 64
-NUM_LAYERS      = 2
+SEQUENCE_LENGTH  = 12   # LSTM input window (weeks of lookback per inference step)
+MIN_HISTORY_WEEKS = 52  # Minimum WCO records required to run forecasting
+HIDDEN_SIZE      = 64
+NUM_LAYERS       = 2
 
 # ── Training state ─────────────────────────────────────────────────────────────
 
@@ -268,9 +269,9 @@ def generate_forecast(
         .order_by(WCOGenerationRecord.week_date)
     ).all())
 
-    if len(rows) < SEQUENCE_LENGTH:
+    if len(rows) < MIN_HISTORY_WEEKS:
         raise ValueError(
-            f"Need at least {SEQUENCE_LENGTH} weeks of history; got {len(rows)}."
+            f"Need at least {MIN_HISTORY_WEEKS} weeks of history; got {len(rows)}."
         )
 
     last_date = rows[-1].week_date
