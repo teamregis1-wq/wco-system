@@ -52,7 +52,11 @@ def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get
     if not user or not verify_password(form.password, user.hashed_password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             detail="Incorrect email or password")
-    return Token(access_token=create_access_token(user_id=user.id, role=user.role))
+    # Include the user so the frontend doesn't need a follow-up /auth/me call.
+    return Token(
+        access_token=create_access_token(user_id=user.id, role=user.role),
+        user=user,
+    )
 
 
 @router.get("/me", response_model=UserOut)

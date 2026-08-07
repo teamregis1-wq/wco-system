@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth, type Role } from "@/lib/auth-context";
+import { LogoMark } from "@/components/Logo";
+import { brandFont } from "@/lib/fonts";
 
 const ROLE_BADGE: Record<Role, { bg: string; color: string; label: string }> = {
   admin:      { bg: "#fef3c7", color: "#92400e",  label: "Admin" },
@@ -11,7 +13,7 @@ const ROLE_BADGE: Record<Role, { bg: string; color: string; label: string }> = {
 };
 
 const BASE_LINKS = [
-  { href: "/",               label: "Map",            adminOnly: false },
+  { href: "/map",            label: "Map",            adminOnly: false },
   { href: "/dashboard",      label: "Dashboard",      adminOnly: false },
   { href: "/establishments", label: "Establishments", adminOnly: false },
   { href: "/routes",         label: "Routes",         adminOnly: false },
@@ -21,28 +23,17 @@ const BASE_LINKS = [
 export default function Navbar() {
   const { user, signOut, can } = useAuth();
   const pathname = usePathname();
-
-  // Public (unauthenticated) users only see the map — show a minimal brand bar
-  if (!user) {
-    return (
-      <nav style={S.nav}>
-        <span style={S.brand}>WCO System</span>
-        <span style={{ marginLeft: 8, fontSize: 11, color: "#94a3b8" }}>Batangas City · Public View</span>
-        <div style={{ marginLeft: "auto" }}>
-          <Link href="/login" style={{ fontSize: 12, color: "#0f6e56", textDecoration: "none", fontWeight: 600 }}>
-            Sign in
-          </Link>
-        </div>
-      </nav>
-    );
-  }
+  if (!user) return null;
 
   const badge = ROLE_BADGE[user.role] ?? ROLE_BADGE.viewer;
   const links = BASE_LINKS.filter(l => !l.adminOnly || can("admin"));
 
   return (
     <nav style={S.nav}>
-      <span style={S.brand}>WCO System</span>
+      <Link href="/" style={S.brand} title="WCO Atlas home">
+        <LogoMark size={30} />
+        <span className={brandFont.className} style={S.brandText}>WCO&nbsp;Atlas</span>
+      </Link>
 
       <div style={S.tabs}>
         {links.map(({ href, label }) => {
@@ -84,8 +75,12 @@ const S: Record<string, React.CSSProperties> = {
     fontFamily: "system-ui, -apple-system, sans-serif",
   },
   brand: {
-    fontWeight: 900, fontSize: 15, color: "#0f6e56",
-    letterSpacing: "-0.02em", marginRight: 12, flexShrink: 0,
+    display: "flex", alignItems: "center", gap: 8,
+    textDecoration: "none", marginRight: 14, flexShrink: 0,
+  },
+  brandText: {
+    fontWeight: 700, fontSize: 16, color: "#0f6e56",
+    letterSpacing: "-0.02em",
   },
   tabs: { display: "flex", alignItems: "center", gap: 2 },
   tab: {

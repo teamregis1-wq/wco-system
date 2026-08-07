@@ -30,6 +30,7 @@ class UserOut(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    user: UserOut | None = None  # returned by /auth/login to save a /auth/me round-trip
 
 
 # --- Establishments ---------------------------------------------------------

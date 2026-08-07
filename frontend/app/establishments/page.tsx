@@ -900,7 +900,7 @@ function ForecastModal({ establishment, onClose }: { establishment: Establishmen
     setLoading(true);
     Promise.all([
       apiFetch<{ points: ForecastPoint[]; establishment_id: number; model_version: string }>(
-        `/forecast/${establishment.id}?horizon_weeks=12`
+        `/forecast/${establishment.id}?horizon_weeks=13`
       ),
       apiFetch<WCORecord[]>(`/wco/records?establishment_id=${establishment.id}`),
     ])
@@ -914,7 +914,7 @@ function ForecastModal({ establishment, onClose }: { establishment: Establishmen
       <div style={{ ...MO.modal, maxWidth: 740 }} onClick={e => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
           <div>
-            <h2 style={{ fontSize: 17, fontWeight: 800, color: "#111827", margin: "0 0 2px" }}>12-Week LSTM Forecast</h2>
+            <h2 style={{ fontSize: 17, fontWeight: 800, color: "#111827", margin: "0 0 2px" }}>3-Month LSTM Forecast</h2>
             <div style={{ fontSize: 12, color: "#64748b" }}>{establishment.name} · {establishment.wco_code}</div>
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: "#94a3b8" }}>✕</button>
@@ -943,9 +943,9 @@ function printForecastChart(name: string, wcoCode: string) {
   const win = window.open("", "_blank", "width=1000,height=700");
   if (!win) return;
   win.document.write(`<!DOCTYPE html><html><head><title>Forecast – ${name}</title>
-<style>*{box-sizing:border-box}body{margin:24px;font-family:system-ui,sans-serif;background:white}svg{overflow:visible}@media print{@page{margin:15mm;size:A4 landscape}body{margin:0}}</style>
+<style>*{box-sizing:border-box}body{margin:24px;font-family:system-ui,sans-serif;background:white}svg{overflow:visible}.recharts-wrapper{width:100%!important}@media print{@page{margin:1in;size:A4 portrait}body{margin:0}*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}svg{max-width:100%!important;height:auto!important}}</style>
 </head><body>
-<h2 style="font-size:16px;font-weight:900;color:#111;margin:0 0 4px">${name} – 12-Week LSTM Forecast</h2>
+<h2 style="font-size:16px;font-weight:900;color:#111;margin:0 0 4px">${name} – 3-Month LSTM Forecast</h2>
 <p style="font-size:12px;color:#64748b;margin:0 0 16px">${wcoCode} · WCO Predictive Mapping System</p>
 ${el.outerHTML}
 </body></html>`);
@@ -981,7 +981,7 @@ function EstablishmentDetailModal({
   useEffect(() => {
     setFcLoading(true); setFcError(null);
     Promise.all([
-      apiFetch<{ points: ForecastPoint[]; model_version?: string }>(`/forecast/${e.id}?horizon_weeks=12`),
+      apiFetch<{ points: ForecastPoint[]; model_version?: string }>(`/forecast/${e.id}?horizon_weeks=13`),
       apiFetch<WCORecord[]>(`/wco/records?establishment_id=${e.id}`),
       apiFetch<{ model_version: string | null; metrics: { mae: number; rmse: number; r2: number } | null }>("/forecast/training-status").catch(() => null),
     ])
@@ -1050,11 +1050,11 @@ function EstablishmentDetailModal({
           </RoleGuard>
         </div>
 
-        {/* 12-week LSTM Forecast (inline) */}
+        {/* 3-month LSTM Forecast (inline) */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
           <div>
             <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-              12-Week LSTM Forecast
+              3-Month LSTM Forecast
             </div>
             {trainMeta && (
               <div style={{ display: "flex", gap: 10, marginTop: 4, flexWrap: "wrap" }}>

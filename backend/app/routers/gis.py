@@ -28,7 +28,9 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
+from app.core.cache import cache_get, cache_set
 from app.core.database import get_db
+from app.core.security import get_current_user
 from app.models.establishment import Establishment
 from app.models.wco import WCOGenerationRecord
 
@@ -160,13 +162,17 @@ def _kde_grid(
 
 @router.get("/establishments")
 def gis_establishments(
+    refresh: bool = Query(False, description="Bypass the server cache"),
     db: Session = Depends(get_db),
+    _: str = Depends(get_current_user),
 ):
     """All active establishments as GeoJSON-friendly points."""
+    if not refresh and (cached := cache_get("gis:establishments")) is not None:
+        return cached
     rows = db.scalars(
         select(Establishment).where(Establishment.is_active.is_(True))
     ).all()
-    return [
+    result = [
         {
             "id": e.id,
             "name": e.name,
@@ -178,12 +184,16 @@ def gis_establishments(
         }
         for e in rows
     ]
+    cache_set("gis:establishments", result)
+    return result
 
 
 @router.get("/hotspots")
 def gis_hotspots(
     band: float = Query(_WEIGHT_BAND_DEG, description="Spatial-weight bandwidth in degrees"),
+    refresh: bool = Query(False, description="Bypass the server cache"),
     db: Session = Depends(get_db),
+    _: str = Depends(get_current_user),
 ):
     """Getis-Ord Gi* hotspot scores per establishment.
 
@@ -199,6 +209,8 @@ def gis_hotspots(
     avg_liters  : mean weekly WCO generation (the input variable x_i)
     neighbor_count : number of establishments within the weight band
     """
+    if not refresh and (cached := cache_get(f"gis:hotspots:{band}")) is not None:
+        return cached
     avg_subq = (
         select(
             WCOGenerationRecord.establishment_id,
@@ -257,13 +269,16 @@ def gis_hotspots(
                 "neighbor_count": int(neighbor_counts[i]),
             }
         )
+    cache_set(f"gis:hotspots:{band}", out)
     return out
 
 
 @router.get("/kde")
 def gis_kde(
     steps: int = Query(60, ge=20, le=100, description="Grid resolution (steps × steps)"),
+    refresh: bool = Query(False, description="Bypass the server cache"),
     db: Session = Depends(get_db),
+    _: str = Depends(get_current_user),
 ):
     """Volume-weighted KDE density grid for the heatmap overlay.
 
@@ -277,6 +292,8 @@ def gis_kde(
     top_hotspots: top-10 establishments by Gi* z-score (convenient for sidebar).
     bandwidth_m : Scott's bandwidth (metres) used for the kernel.
     """
+    if not refresh and (cached := cache_get(f"gis:kde:{steps}")) is not None:
+        return cached
     avg_subq = (
         select(
             WCOGenerationRecord.establishment_id,
@@ -347,7 +364,7 @@ def gis_kde(
         for rank, i in enumerate(top10_idx)
     ]
 
-    return {
+    result = {
         "grid": norm_grid,
         "lat_min": round(lat_min, 6),
         "lat_max": round(lat_max, 6),
@@ -357,16 +374,22 @@ def gis_kde(
         "top_hotspots": top_hotspots,
         "bandwidth_m": round(bandwidth_m, 1),
     }
+    cache_set(f"gis:kde:{steps}", result)
+    return result
 
 
 @router.get("/summary")
 def gis_summary(
+    refresh: bool = Query(False, description="Bypass the server cache"),
     db: Session = Depends(get_db),
+    _: str = Depends(get_current_user),
 ):
     """City-wide WCO aggregate statistics.
 
     Returns totals and per-type breakdowns useful for the map sidebar.
     """
+    if not refresh and (cached := cache_get("gis:summary")) is not None:
+        return cached
     avg_subq = (
         select(
             WCOGenerationRecord.establishment_id,
@@ -421,10 +444,12 @@ def gis_summary(
         for t, d in sorted(type_data.items(), key=lambda x: -x[1]["total"])
     ]
 
-    return {
+    result = {
         "total_establishments": len(rows),
         "total_wco_per_week": round(float(volumes.sum()), 1),
         "mean_wco_per_establishment": round(float(volumes.mean()), 1),
         "hotspot_counts": hotspot_counts,
         "by_type": by_type,
     }
+    cache_set("gis:summary", result)
+    return result

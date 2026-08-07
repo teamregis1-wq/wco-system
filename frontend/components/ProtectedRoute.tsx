@@ -18,7 +18,7 @@ export default function ProtectedRoute({ children, require: requiredAction }: Pr
   const router = useRouter();
 
   useEffect(() => {
-    if (!loading && !user) router.push("/login");
+    if (!loading && !user) router.push("/?signin=1");
   }, [user, loading, router]);
 
   if (loading) return <LoadingScreen />;

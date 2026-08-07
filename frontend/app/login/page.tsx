@@ -2,19 +2,21 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
+import { LogoWordmark } from "@/components/Logo";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000/api/v1";
 
 type Tab = "signin" | "register";
 
 export default function LoginPage() {
-  const { user, loading, signIn } = useAuth();
+  const { user, loading } = useAuth();
   const router = useRouter();
   const [tab, setTab] = useState<Tab>("signin");
 
   useEffect(() => {
-    if (!loading && user) router.replace("/");
+    if (!loading && user) router.replace("/map");
   }, [user, loading, router]);
 
   if (loading || user) return <Spinner />;
@@ -24,18 +26,20 @@ export default function LoginPage() {
       {/* ── Left branding panel ── */}
       <div style={S.left}>
         <div style={S.leftInner}>
-          <div style={S.logoMark}>WCO</div>
-          <h1 style={S.headline}>Predictive Mapping System</h1>
+          <Link href="/" style={{ textDecoration: "none", display: "inline-block", marginBottom: 26 }}>
+            <LogoWordmark size={44} color="white" subtitleColor="rgba(255,255,255,0.55)" />
+          </Link>
+          <h1 style={S.headline}>Every litre mapped, forecast, and collected.</h1>
           <p style={S.sub}>
-            Waste Cooking Oil generation forecasting, GIS hotspot analysis,
-            and biodiesel yield optimisation for Batangas City.
+            Waste cooking oil generation forecasting, GIS hotspot analysis,
+            and road-accurate collection routing for Batangas City.
           </p>
           <div style={S.featureList}>
             {[
               "Getis-Ord Gi* spatial hotspot analysis",
-              "Volume-weighted KDE heatmap",
-              "LSTM 12-week WCO forecast",
-              "RSM biodiesel yield optimisation",
+              "Volume-weighted KDE density heatmap",
+              "3-month LSTM generation forecast",
+              "Road-network route optimization",
             ].map(f => (
               <div key={f} style={S.feature}>
                 <span style={S.featureDot} />
@@ -44,8 +48,7 @@ export default function LoginPage() {
             ))}
           </div>
           <div style={S.accessNote}>
-            <span style={S.accessIcon}>🔓</span>
-            <span>Public accounts get read-only access to the map and dashboards.</span>
+            Access is limited to authorized members. New accounts start as viewers until an administrator assigns a role.
           </div>
         </div>
       </div>
@@ -70,7 +73,7 @@ export default function LoginPage() {
           </div>
 
           {tab === "signin"
-            ? <SignInForm onSuccess={() => router.push("/")} onSwitchTab={() => setTab("register")} />
+            ? <SignInForm onSuccess={() => router.push("/map")} onSwitchTab={() => setTab("register")} />
             : <RegisterForm onSuccess={() => setTab("signin")} onSwitchTab={() => setTab("signin")} />
           }
         </div>
@@ -106,7 +109,7 @@ function SignInForm({ onSuccess, onSwitchTab }: { onSuccess: () => void; onSwitc
     <div>
       <div style={S.formHeader}>
         <h2 style={S.formTitle}>Welcome back</h2>
-        <p style={S.formSub}>Sign in to your WCO account</p>
+        <p style={S.formSub}>Sign in to your WCO Atlas account</p>
       </div>
 
       <form onSubmit={submit}>
@@ -129,14 +132,14 @@ function SignInForm({ onSuccess, onSwitchTab }: { onSuccess: () => void; onSwitc
 
       <p style={S.switchText}>
         Don't have an account?{" "}
-        <button onClick={onSwitchTab} style={S.switchLink}>Create one for free</button>
+        <button onClick={onSwitchTab} style={S.switchLink}>Request access</button>
       </p>
 
-      {/* Dev hint */}
+      {/* Dev hint — remove before production hand-off */}
       <div style={S.hintBox}>
         <div style={S.hintTitle}>Test accounts</div>
         {[
-          { role: "Admin",      email: "admin@wco.local",     pw: "admin12345",    color: "#92400e", bg: "#fef3c7" },
+          { role: "Admin",      email: "admin@wco.local",      pw: "admin12345",    color: "#92400e", bg: "#fef3c7" },
           { role: "Researcher", email: "researcher@wco.local", pw: "research12345", color: "#1d4ed8", bg: "#dbeafe" },
         ].map(a => (
           <button key={a.email} onClick={() => { setEmail(a.email); setPassword(a.pw); setError(null); }} style={S.hintRow}>
@@ -207,7 +210,7 @@ function RegisterForm({ onSuccess, onSwitchTab }: { onSuccess: () => void; onSwi
     <div>
       <div style={S.formHeader}>
         <h2 style={S.formTitle}>Create your account</h2>
-        <p style={S.formSub}>Free · Read-only access to all modules</p>
+        <p style={S.formSub}>New accounts start with viewer access</p>
       </div>
 
       <form onSubmit={submit}>
@@ -233,8 +236,7 @@ function RegisterForm({ onSuccess, onSwitchTab }: { onSuccess: () => void; onSwi
 
         {/* Role note */}
         <div style={S.roleNote}>
-          <span style={S.roleIcon}>👁</span>
-          <span>Your account will have <strong>Viewer</strong> access. An admin can upgrade your role later.</span>
+          Your account will have <strong>Viewer</strong> access. An admin can upgrade your role later.
         </div>
 
         {error && <div style={S.errorBox}>{error}</div>}
@@ -278,22 +280,16 @@ const S: Record<string, React.CSSProperties> = {
     padding: 48,
   },
   leftInner: { maxWidth: 440, color: "white" },
-  logoMark: {
-    display: "inline-block", fontSize: 13, fontWeight: 900,
-    letterSpacing: "0.18em", background: "rgba(255,255,255,0.15)",
-    color: "white", padding: "5px 12px", borderRadius: 8, marginBottom: 24,
-  },
   headline: { fontSize: 32, fontWeight: 900, margin: "0 0 14px", letterSpacing: "-0.02em", lineHeight: 1.15 },
   sub: { fontSize: 15, color: "rgba(255,255,255,0.75)", margin: "0 0 28px", lineHeight: 1.6 },
   featureList: { display: "flex", flexDirection: "column" as const, gap: 10, marginBottom: 24 },
   feature: { display: "flex", alignItems: "center", gap: 10, fontSize: 14, color: "rgba(255,255,255,0.85)" },
   featureDot: { width: 6, height: 6, borderRadius: "50%", background: "rgba(255,255,255,0.6)", flexShrink: 0 },
   accessNote: {
-    display: "flex", alignItems: "flex-start", gap: 10,
     background: "rgba(255,255,255,0.1)", borderRadius: 10,
+    borderLeft: "3px solid rgba(126,240,200,0.6)",
     padding: "12px 14px", fontSize: 13, color: "rgba(255,255,255,0.85)", lineHeight: 1.5,
   },
-  accessIcon: { fontSize: 16, flexShrink: 0, marginTop: 1 },
   // Right form panel
   right: {
     width: 480, display: "flex", alignItems: "center",
@@ -345,12 +341,10 @@ const S: Record<string, React.CSSProperties> = {
     fontFamily: "inherit",
   },
   roleNote: {
-    display: "flex", alignItems: "flex-start", gap: 8,
     marginTop: 14, padding: "10px 12px",
     background: "#f0fdf4", border: "1px solid #bbf7d0",
     borderRadius: 10, fontSize: 12, color: "#166534", lineHeight: 1.5,
   },
-  roleIcon: { fontSize: 14, flexShrink: 0, marginTop: 1 },
   switchText: { fontSize: 13, color: "#6b7280", textAlign: "center" as const, marginTop: 20 },
   switchLink: {
     background: "none", border: "none", color: "#0f6e56",

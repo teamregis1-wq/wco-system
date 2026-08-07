@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.audit import log_action
+from app.core.cache import invalidate_gis_cache
 from app.core.database import get_db
 from app.core.security import get_current_user, require_role
 from app.models.establishment import Establishment
@@ -58,6 +59,7 @@ def create_establishment(
     log_action(db, current_user.email, current_user.id, "create", "establishment",
                details=payload.name)
     db.commit()
+    invalidate_gis_cache()
     db.refresh(estab)
     return estab
 
@@ -81,6 +83,7 @@ def update_establishment(
     log_action(db, current_user.email, current_user.id, action, "establishment",
                estab_id, details=estab.name)
     db.commit()
+    invalidate_gis_cache()
     db.refresh(estab)
     return estab
 
@@ -110,6 +113,7 @@ def bulk_create_establishments(
         log_action(db, current_user.email, current_user.id, "create", "establishment",
                    details=f"bulk import {imported} establishments ({skipped} skipped)")
         db.commit()
+        invalidate_gis_cache()
     return {"imported": imported, "skipped": skipped}
 
 
@@ -126,3 +130,4 @@ def soft_delete_establishment(
                estab_id, details=estab.name)
     estab.is_active = False
     db.commit()
+    invalidate_gis_cache()

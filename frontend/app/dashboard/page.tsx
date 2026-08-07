@@ -154,8 +154,19 @@ function DashboardContent() {
   svg { overflow: visible !important; }
   .recharts-wrapper, .recharts-surface { overflow: visible !important; }
   @media print {
-    @page { margin: 10mm; size: A4 landscape; }
-    body { margin: 8px 12px; }
+    @page { margin: 1in; size: A4 portrait; }
+    body { margin: 0; width: 100%; }
+    /* Keep card/chart colours in the printed PDF */
+    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+    /* Reflow wide dashboard grids so nothing is clipped at portrait width */
+    .pdf-g5 { grid-template-columns: repeat(2, 1fr) !important; }
+    .pdf-g3 { grid-template-columns: repeat(2, 1fr) !important; }
+    .pdf-g2 { grid-template-columns: 1fr !important; }
+    /* Charts scale down instead of overflowing the page box */
+    .recharts-wrapper { width: 100% !important; }
+    svg { max-width: 100% !important; height: auto !important; }
+    /* Avoid splitting a card across two pages */
+    .pdf-g5 > div, .pdf-g3 > div, .pdf-g2 > div { break-inside: avoid; page-break-inside: avoid; }
   }
 </style>
 </head><body>${el.outerHTML}</body></html>`);
@@ -176,7 +187,7 @@ function DashboardContent() {
             WCO System Overview
           </h1>
           <p style={{ fontSize: 13, color: "#6b7280", margin: 0 }}>
-            Batangas City · Live summary from GIS analysis &amp; RSM model
+            Batangas City · Live summary from GIS hotspot analysis &amp; LSTM forecasting
           </p>
         </div>
         <button
@@ -190,7 +201,7 @@ function DashboardContent() {
 
       {/* ── Row 1: GIS overview (5 cards, fixed columns) ─────────────────── */}
       {summary && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 12, marginBottom: 12 }}>
+        <div className="pdf-g5" style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 12, marginBottom: 12 }}>
           {[
             { label: "Establishments",       value: summary.total_establishments,                                                    unit: "",      color: "#1a202c" },
             { label: "Total WCO / week",     value: summary.total_wco_per_week.toLocaleString(),                                    unit: "L",     color: "#0f6e56" },
@@ -209,11 +220,11 @@ function DashboardContent() {
       )}
 
       {/* ── Row 2: WCO period summary + LSTM model metrics ───────────────── */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+      <div className="pdf-g2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
         {/* Period summary */}
         <div style={{ background: "white", borderRadius: 14, padding: "16px 20px", boxShadow: "0 1px 3px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.06)" }}>
           <div style={{ fontSize: 10, fontWeight: 800, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 12 }}>WCO Period Summary</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10 }}>
+          <div className="pdf-g3" style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10 }}>
             {wcoSummary ? [
               { label: `This Month (${new Date(wcoSummary.current_year, wcoSummary.current_month - 1).toLocaleString("default", { month: "short" })})`, value: wcoSummary.month_total_liters.toLocaleString(), unit: "L", color: "#0369a1" },
               { label: `YTD ${wcoSummary.current_year}`, value: wcoSummary.ytd_total_liters.toLocaleString(), unit: "L", color: "#7c3aed" },
@@ -238,7 +249,7 @@ function DashboardContent() {
             {trainStatus?.model_version && <span style={{ marginLeft: 6, fontWeight: 500, color: "#cbd5e1" }}>v{trainStatus.model_version}</span>}
           </div>
           {trainStatus?.metrics ? (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10 }}>
+            <div className="pdf-g3" style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10 }}>
               {[
                 { label: "MAE",  value: `${trainStatus.metrics.mae}`, unit: "L",  sub: "Mean Abs. Error",     color: "#0f6e56" },
                 { label: "RMSE", value: `${trainStatus.metrics.rmse}`, unit: "L", sub: "Root Mean Sq.",       color: "#0f6e56" },
@@ -321,7 +332,7 @@ function DashboardContent() {
       {aggForecast.length > 0 && (
         <div style={{ background: "white", borderRadius: 16, padding: 20, marginBottom: 16, boxShadow: "0 1px 3px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.06)" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-            <div style={{ fontSize: 12, fontWeight: 800, color: "#1a202c", textTransform: "uppercase", letterSpacing: "0.06em" }}>12-Week Aggregate WCO Forecast</div>
+            <div style={{ fontSize: 12, fontWeight: 800, color: "#1a202c", textTransform: "uppercase", letterSpacing: "0.06em" }}>3-Month Aggregate WCO Forecast</div>
             <span style={{ fontSize: 11, color: "#94a3b8" }}>{aggForecast[0]?.establishment_count ?? 0} establishments</span>
           </div>
           <ResponsiveContainer width="100%" height={180}>
@@ -355,7 +366,7 @@ function DashboardContent() {
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <div className="pdf-g2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         {/* Top 5 hotspots */}
         <div style={{ background: "white", borderRadius: 16, padding: 20, boxShadow: "0 1px 3px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.06)" }}>
           <div style={{ fontSize: 12, fontWeight: 800, color: "#1a202c", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 16 }}>Top 5 Hotspots</div>

@@ -71,6 +71,22 @@ interface RouteResult {
   geometry?: [number, number][] | null;
 }
 
+interface SavedRoute {
+  id: number;
+  name: string;
+  depot_name: string;
+  depot_lat: number;
+  depot_lng: number;
+  total_distance_km: number;
+  total_establishments: number;
+  total_wco_liters: number;
+  estimated_duration_min: number;
+  algorithm: string;
+  stops_json: RouteStop[] | null;
+  geometry_json: [number, number][] | null;
+  created_at: string;
+}
+
 export default function RoutesPage() {
   return (
     <ProtectedRoute>
@@ -108,17 +124,59 @@ function RoutesContent() {
   const [p2pResult, setP2pResult] = useState<{ distance_m: number; geometry?: [number,number][] | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const [history, setHistory] = useState<SavedRoute[]>([]);
+  const [loadedRouteId, setLoadedRouteId] = useState<number | null>(null);
+
   useEffect(() => {
     Promise.all([
-      apiFetch<Establishment[]>("/establishments"),
-      apiFetch<Hotspot[]>("/gis/hotspots").catch(() => []),
-    ]).then(([estabs, hotspots]) => {
+      apiFetch<Establishment[]>("/establishments").catch(() => null),
+      apiFetch<Hotspot[]>("/gis/hotspots").catch(() => [] as Hotspot[]),
+      apiFetch<SavedRoute[]>("/routes/saved").catch(() => [] as SavedRoute[]),
+    ]).then(([estabs, hotspots, saved]) => {
+      if (!estabs) {
+        setError("Could not load establishments. Make sure the backend is running.");
+        return;
+      }
       setEstablishments(estabs);
       const map = new Map<number, Hotspot>();
       (hotspots as Hotspot[]).forEach(h => map.set(h.establishment_id, h));
       setHotspotMap(map);
+      setHistory(saved as SavedRoute[]);
     }).finally(() => setLoadingData(false));
   }, []);
+
+  function loadSavedRoute(r: SavedRoute) {
+    setMode("tsp");
+    setP2pResult(null);
+    setDepotName(r.depot_name);
+    setDepotLat(String(r.depot_lat));
+    setDepotLng(String(r.depot_lng));
+    setLoadedRouteId(r.id);
+    setResult({
+      depot_lat: r.depot_lat,
+      depot_lng: r.depot_lng,
+      depot_name: r.depot_name,
+      stops: r.stops_json ?? [],
+      total_distance_km: r.total_distance_km,
+      total_establishments: r.total_establishments,
+      estimated_duration_min: r.estimated_duration_min,
+      total_wco_liters: r.total_wco_liters,
+      algorithm: r.algorithm,
+      computation_time_ms: 0,
+      geometry: r.geometry_json,
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function deleteSavedRoute(id: number) {
+    try {
+      await apiFetch(`/routes/saved/${id}`, { method: "DELETE" });
+      setHistory(prev => prev.filter(r => r.id !== id));
+      if (loadedRouteId === id) setLoadedRouteId(null);
+    } catch {
+      /* keep the entry if the delete fails */
+    }
+  }
 
   const toggleAll = useCallback(() => {
     const visible = filtered();
@@ -154,6 +212,31 @@ function RoutesContent() {
         }),
       });
       setResult(res);
+      setLoadedRouteId(null);
+
+      // Auto-save into route history (non-blocking; history is best-effort)
+      const stamp = new Date().toLocaleString(undefined, {
+        month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+      });
+      apiFetch<SavedRoute>("/routes/saved", {
+        method: "POST",
+        body: JSON.stringify({
+          name: `${res.depot_name} · ${res.stops.length} stops · ${stamp}`,
+          depot_name: res.depot_name,
+          depot_lat: res.depot_lat,
+          depot_lng: res.depot_lng,
+          total_distance_km: res.total_distance_km,
+          total_establishments: res.total_establishments,
+          total_wco_liters: res.total_wco_liters,
+          estimated_duration_min: res.estimated_duration_min,
+          algorithm: res.algorithm,
+          stops_json: res.stops,
+          geometry_json: res.geometry ?? null,
+        }),
+      }).then(saved => {
+        setHistory(prev => [saved, ...prev]);
+        setLoadedRouteId(saved.id);
+      }).catch(() => {});
     } catch (err) {
       setError(String(err).replace(/^(Type)?Error:\s*/, ""));
     } finally {
@@ -167,7 +250,8 @@ function RoutesContent() {
     setError(null); setComputing(true); setResult(null); setP2pResult(null);
     try {
       const res = await apiFetch<{ total_distance_m: number; geometry?: [number,number][] | null }>(
-        `/routes/compute?source_id=${p2pFrom}&target_id=${p2pTo}&algorithm=dijkstra_shortest`
+        `/routes/compute?source_id=${p2pFrom}&target_id=${p2pTo}&algorithm=dijkstra_shortest`,
+        { method: "POST" }
       );
       setP2pResult({ distance_m: res.total_distance_m, geometry: res.geometry });
     } catch (err) {
@@ -387,6 +471,68 @@ function RoutesContent() {
               {error}
             </div>
           )}
+
+          {/* Route history */}
+          <div style={{ background: "white", borderRadius: 16, padding: 20, boxShadow: "0 1px 3px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.06)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: "#1a202c", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                Route History
+              </div>
+              <span style={{ fontSize: 11, color: "#64748b" }}>{history.length} saved</span>
+            </div>
+
+            {history.length === 0 ? (
+              <div style={{ padding: "14px 0", textAlign: "center", color: "#94a3b8", fontSize: 12 }}>
+                No routes yet — computed routes are saved here automatically.
+              </div>
+            ) : (
+              <div style={{ maxHeight: 300, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
+                {history.map(r => {
+                  const active = loadedRouteId === r.id;
+                  return (
+                    <div key={r.id} style={{
+                      display: "flex", alignItems: "center", gap: 8,
+                      padding: "9px 11px", borderRadius: 10,
+                      background: active ? "#f0fdf4" : "#fafafa",
+                      border: `1px solid ${active ? "#bbf7d0" : "#f1f5f9"}`,
+                    }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {r.name}
+                        </div>
+                        <div style={{ fontSize: 10.5, color: "#94a3b8", marginTop: 1 }}>
+                          {r.total_establishments} stops · {r.total_distance_km} km · {new Date(r.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => loadSavedRoute(r)}
+                        disabled={active}
+                        style={{
+                          fontSize: 11, fontWeight: 600, padding: "5px 10px", borderRadius: 7,
+                          border: "1px solid #d1fae5", cursor: active ? "default" : "pointer",
+                          background: active ? "#0f6e56" : "white", color: active ? "white" : "#0f6e56",
+                          flexShrink: 0,
+                        }}
+                      >
+                        {active ? "Loaded" : "Load"}
+                      </button>
+                      <button
+                        onClick={() => deleteSavedRoute(r.id)}
+                        title="Delete from history"
+                        style={{
+                          fontSize: 12, padding: "5px 8px", borderRadius: 7,
+                          border: "1px solid #fecaca", cursor: "pointer",
+                          background: "white", color: "#dc2626", flexShrink: 0,
+                        }}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Right panel: results */}
@@ -425,7 +571,7 @@ function RoutesContent() {
                     depotLat={fromE.latitude}
                     depotLng={fromE.longitude}
                     depotName={fromE.name}
-                    stops={[{ stop_number: 1, name: toE.name, barangay: toE.barangay, lat: toE.latitude, lng: toE.longitude, avg_liters: 0 }]}
+                    stops={[{ stop_number: 1, name: toE.name, barangay: toE.barangay, lat: toE.latitude, lng: toE.longitude }]}
                     geometry={p2pResult.geometry}
                   />
                 )}
@@ -447,21 +593,28 @@ function RoutesContent() {
               style.id = "__route-print-style";
               style.textContent = `
                 @media print {
-                  @page { margin: 8mm; size: A4 landscape; }
+                  @page { margin: 1in; size: A4 portrait; }
                   body * { visibility: hidden !important; }
                   #route-print-area, #route-print-area * { visibility: visible !important; }
                   #route-print-area {
                     position: fixed !important;
-                    inset: 0 !important;
-                    padding: 14px 20px !important;
+                    top: 0 !important;
+                    left: 0 !important;
+                    padding: 0 !important;
                     background: white !important;
-                    width: 100vw !important;
+                    width: 100% !important;
                     font-family: system-ui, sans-serif !important;
                   }
                   .route-print-header { display: block !important; }
-                  .route-map-wrapper { height: 210px !important; overflow: hidden !important; }
+                  .route-map-wrapper { height: 240px !important; overflow: hidden !important; }
                   .route-map-wrapper * { visibility: visible !important; }
-                  .leaflet-container { height: 210px !important; }
+                  .leaflet-container { height: 240px !important; }
+                  /* Keep card colours and reflow the summary grid for portrait width */
+                  #route-print-area * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                  .route-summary-grid { grid-template-columns: repeat(2, 1fr) !important; }
+                  #route-print-area table { width: 100% !important; font-size: 11px !important; }
+                  #route-print-area tr { break-inside: avoid; page-break-inside: avoid; }
+                  .route-noprint { display: none !important; }
                 }
               `;
               document.head.appendChild(style);
@@ -480,7 +633,7 @@ function RoutesContent() {
                 </div>
               </div>
               {/* Summary cards */}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12 }}>
+              <div className="route-summary-grid" style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12 }}>
                 {[
                   { label: "Stops",        value: result.total_establishments,                               unit: "",     color: "#1a202c" },
                   { label: "Distance",     value: result.total_distance_km.toFixed(1),                       unit: "km",   color: "#0369a1" },
@@ -499,7 +652,10 @@ function RoutesContent() {
               {/* Algorithm + computation time */}
               <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 4 }}>
                 Algorithm: <span style={{ color: "#374151", fontWeight: 600 }}>{result.algorithm}</span>
-                &nbsp;·&nbsp;Computed in <span style={{ color: "#374151", fontWeight: 600 }}>{result.computation_time_ms} ms</span>
+                {result.computation_time_ms > 0
+                  ? <>&nbsp;·&nbsp;Computed in <span style={{ color: "#374151", fontWeight: 600 }}>{result.computation_time_ms} ms</span></>
+                  : <>&nbsp;·&nbsp;<span style={{ color: "#374151", fontWeight: 600 }}>Loaded from history</span></>
+                }
               </div>
 
               <div className="route-map-wrapper">
@@ -519,6 +675,7 @@ function RoutesContent() {
                   <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                     <span style={{ fontSize: 11, color: "#94a3b8" }}>Depot: {result.depot_name}</span>
                     <button
+                      className="route-noprint"
                       onClick={exportRoutePDF}
                       style={{ fontSize: 11, padding: "5px 12px", borderRadius: 8, border: "1px solid #e2e8f0", background: "white", cursor: "pointer", color: "#374151", fontWeight: 600, fontFamily: "inherit" }}
                     >
@@ -530,7 +687,7 @@ function RoutesContent() {
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                     <thead>
                       <tr style={{ background: "#f8fafc" }}>
-                        {["#", "Code", "Establishment", "Barangay", "Avg WCO", "Leg (km)", "Cumul. (km)"].map(h => (
+                        {["#", "Code", "Establishment", "Barangay", "Leg (km)", "Cumul. (km)"].map(h => (
                           <th key={h} style={{ padding: "9px 14px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em", borderBottom: "1px solid #e2e8f0", whiteSpace: "nowrap" }}>{h}</th>
                         ))}
                       </tr>
@@ -548,14 +705,12 @@ function RoutesContent() {
                             <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.name}</div>
                           </td>
                           <td style={{ padding: "10px 14px", borderBottom: "1px solid #f1f5f9", color: "#64748b" }}>{s.barangay ?? "—"}</td>
-                          <td style={{ padding: "10px 14px", borderBottom: "1px solid #f1f5f9", fontVariantNumeric: "tabular-nums", color: "#0f6e56", fontWeight: 600 }}>{s.avg_liters} L</td>
                           <td style={{ padding: "10px 14px", borderBottom: "1px solid #f1f5f9", fontVariantNumeric: "tabular-nums", color: "#374151" }}>{s.leg_distance_km}</td>
                           <td style={{ padding: "10px 14px", borderBottom: "1px solid #f1f5f9", fontVariantNumeric: "tabular-nums", color: "#64748b" }}>{s.cumulative_distance_km}</td>
                         </tr>
                       ))}
                       <tr style={{ background: "#f8fafc" }}>
                         <td colSpan={4} style={{ padding: "10px 14px", fontSize: 11, color: "#94a3b8", fontStyle: "italic" }}>Return to {result.depot_name}</td>
-                        <td style={{ padding: "10px 14px", fontWeight: 700, color: "#0f6e56", fontVariantNumeric: "tabular-nums" }}>{result.total_wco_liters} L total</td>
                         <td colSpan={2} style={{ padding: "10px 14px", fontWeight: 700, color: "#0369a1", fontVariantNumeric: "tabular-nums" }}>{result.total_distance_km} km total</td>
                       </tr>
                     </tbody>

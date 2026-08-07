@@ -2,6 +2,6 @@ venv/
 __pycache__/
 *.pyc
 .env
-app/services/model_artifacts/*.pt
-app/services/model_artifacts/*.npz
+#app/services/model_artifacts/*.pt
+#app/services/model_artifacts/*.npz
 .DS_Store

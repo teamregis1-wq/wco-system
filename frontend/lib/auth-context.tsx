@@ -78,9 +78,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     if (res.status === 401) throw new Error("Incorrect email or password.");
     if (!res.ok) throw new Error(`Login failed (${res.status}).`);
-    const { access_token } = await res.json() as { access_token: string };
+    const { access_token, user: loginUser } =
+      await res.json() as { access_token: string; user?: User };
     setToken(access_token);
 
+    // The login response includes the user; only fall back to /auth/me if absent.
+    if (loginUser) {
+      setUser(loginUser);
+      return;
+    }
     const meRes = await fetch(`${API_BASE}/auth/me`, {
       headers: { Authorization: `Bearer ${access_token}` },
     });
@@ -92,7 +98,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signOut = useCallback(() => {
     clearToken();
     setUser(null);
-    router.push("/login");
+    router.push("/");
   }, [router]);
 
   const can = useCallback((action: Action): boolean => {

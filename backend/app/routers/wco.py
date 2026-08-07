@@ -3,6 +3,7 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
 from app.core.audit import log_action
+from app.core.cache import invalidate_gis_cache
 from app.core.database import get_db
 from app.core.security import get_current_user, require_role
 from app.models.wco import WCOGenerationRecord
@@ -71,6 +72,7 @@ def create_record(
                resource_id=payload.establishment_id,
                details=f"{payload.quantity_liters}L week={payload.week_date}")
     db.commit()
+    invalidate_gis_cache()
     db.refresh(record)
     return record
 
@@ -101,6 +103,7 @@ def bulk_create_records(
         log_action(db, current_user.email, current_user.id, "create", "wco_record",
                    details=f"bulk import {imported} records ({skipped} skipped)")
         db.commit()
+        invalidate_gis_cache()
     return {"imported": imported, "skipped": skipped}
 
 
@@ -118,6 +121,7 @@ def update_record(
         setattr(record, k, v)
     log_action(db, current_user.email, current_user.id, "update", "wco_record", record_id)
     db.commit()
+    invalidate_gis_cache()
     db.refresh(record)
     return record
 
@@ -134,6 +138,7 @@ def delete_record(
     log_action(db, current_user.email, current_user.id, "delete", "wco_record", record_id)
     db.delete(record)
     db.commit()
+    invalidate_gis_cache()
 
 
 @router.get("/summary", response_model=WCOSummaryOut)

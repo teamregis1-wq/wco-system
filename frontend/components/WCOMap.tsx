@@ -9,7 +9,7 @@
  *   - Right panel: legend, city summary, top-10 hotspot list, forecast chart
  */
 
-import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import {
   MapContainer, TileLayer, CircleMarker, ImageOverlay, Tooltip, useMap, useMapEvents,
 } from "react-leaflet";
@@ -281,11 +281,14 @@ export default function WCOMap() {
   useEffect(() => {
     setLoading(true);
     setError(null);
+    // Manual refresh bypasses the server-side GIS cache so newly imported
+    // records show up immediately; the initial load may use the cache.
+    const fresh = refreshKey > 0 ? "&refresh=1" : "";
     Promise.all([
-      apiFetch<GiHotspot[]>("/gis/hotspots"),
-      apiFetch<KdeData>("/gis/kde?steps=60"),
-      apiFetch<GisSummary>("/gis/summary"),
-      apiFetch<Establishment[]>("/gis/establishments"),
+      apiFetch<GiHotspot[]>(`/gis/hotspots?_=1${fresh}`),
+      apiFetch<KdeData>(`/gis/kde?steps=60${fresh}`),
+      apiFetch<GisSummary>(`/gis/summary?_=1${fresh}`),
+      apiFetch<Establishment[]>(`/gis/establishments?_=1${fresh}`),
     ])
       .then(([h, k, s, e]) => {
         setHotspots(h);
@@ -305,10 +308,6 @@ export default function WCOMap() {
 
   async function loadForecast(id: number) {
     setSelectedId(id);
-    if (!getToken()) {
-      setForecastError("Sign in to view forecasts and historical records.");
-      return;
-    }
     setForecasting(true);
     setForecast([]);
     setHistorical([]);
@@ -335,15 +334,18 @@ export default function WCOMap() {
     style.id = "__map-print-style";
     style.textContent = `
       @media print {
-        @page { margin: 0; size: A4 landscape; }
+        @page { margin: 1in; size: A4 portrait; }
         body * { visibility: hidden !important; }
         #__map-print-root,
         #__map-print-root * { visibility: visible !important; }
+        .map-noprint, .map-noprint * { display: none !important; visibility: hidden !important; }
+        #__map-print-root * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
         #__map-print-root {
           position: fixed !important;
-          inset: 0 !important;
-          width: 100vw !important;
-          height: 100vh !important;
+          top: 0 !important;
+          left: 0 !important;
+          width: 100% !important;
+          height: 7.7in !important;
           z-index: 99999 !important;
         }
       }
@@ -473,7 +475,7 @@ export default function WCOMap() {
         </MapContainer>
 
         {/* Bottom-left button row — flex so buttons never overlap */}
-        <div style={{
+        <div className="map-noprint" style={{
           position: "absolute", bottom: 24, left: 14, zIndex: 500,
           display: "flex", gap: 8, flexWrap: "wrap",
         }}>
@@ -500,6 +502,7 @@ export default function WCOMap() {
 
         {/* Export PDF button */}
         <button
+          className="map-noprint"
           onClick={exportMapPDF}
           style={{
             position: "absolute", bottom: 24, right: 14, zIndex: 500,

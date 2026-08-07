@@ -3,6 +3,8 @@
 Run locally with:  uvicorn app.main:app --reload
 Then open http://localhost:8000/docs for interactive API documentation.
 """
+import threading
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -11,6 +13,23 @@ from app.routers import analysis, auth, establishments, forecast, gis, quality_t
 from app.routers import biodiesel_router as biodiesel
 
 app = FastAPI(title=settings.project_name)
+
+
+@app.on_event("startup")
+def warm_db_pool() -> None:
+    """Prime a database connection in the background so the first user
+    request (usually a login) doesn't pay the connection-setup cost.
+    Runs in a thread so a slow/unreachable database never blocks boot."""
+    def _warm() -> None:
+        try:
+            from sqlalchemy import text
+            from app.core.database import engine
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+        except Exception:
+            pass  # DB down — requests will surface the error with their own timeout
+
+    threading.Thread(target=_warm, daemon=True).start()
 
 app.add_middleware(
     CORSMiddleware,

@@ -12,8 +12,13 @@ from app.core.config import settings
 
 engine = create_engine(
     settings.database_url,
-    pool_pre_ping=True,  # transparently reconnect dropped connections
-    echo=False,          # set True to see every SQL statement while learning
+    pool_pre_ping=True,   # transparently reconnect dropped connections
+    pool_size=3,          # Supabase session pooler allows few clients — stay small
+    max_overflow=2,
+    pool_recycle=900,     # retire idle connections after 15 min
+    pool_timeout=20,      # fail fast instead of hanging when pool is exhausted
+    connect_args={"connect_timeout": 10},
+    echo=False,           # set True to see every SQL statement while learning
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
