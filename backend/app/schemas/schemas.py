@@ -36,15 +36,17 @@ class Token(BaseModel):
 # --- Establishments ---------------------------------------------------------
 
 class EstablishmentBase(BaseModel):
-    wco_code: str
-    name: str
+    # Constraints mirror the CSV importer's client-side validation so bad data
+    # cannot enter through a direct API call either.
+    wco_code: str = Field(min_length=1, max_length=50)
+    name: str = Field(min_length=1, max_length=200)
     type: str
     address: str | None = None
     barangay: str | None = None
-    latitude: float
-    longitude: float
+    latitude: float = Field(ge=-90.0, le=90.0)
+    longitude: float = Field(ge=-180.0, le=180.0)
     business_hours: str | None = None
-    seating_capacity: int | None = None
+    seating_capacity: int | None = Field(default=None, ge=0)
     contact_info: str | None = None
     consent_given: bool = False
 
@@ -80,8 +82,10 @@ class WCORecordCreate(BaseModel):
     establishment_id: int
     week_date: date
     week_end_date: date | None = None
-    quantity_liters: float
-    notes: str | None = None
+    # A negative weekly volume is always a data-entry error; the 10,000 L ceiling
+    # matches the importer and catches unit mix-ups (e.g. millilitres).
+    quantity_liters: float = Field(ge=0.0, le=10_000.0)
+    notes: str | None = Field(default=None, max_length=500)
 
 
 class WCORecordOut(WCORecordCreate):

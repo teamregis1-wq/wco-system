@@ -7,6 +7,7 @@ import PageShell, { card as cardStyle, primaryBtn as primaryBtnStyle, ghostBtn a
 import { getToken } from "@/lib/api";
 import { useAuth, type Role } from "@/lib/auth-context";
 import { toast, Toaster } from "@/components/Toast";
+import { downloadCSV } from "@/lib/csv";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -28,20 +29,6 @@ interface AuditEntry {
   created_at: string;
 }
 
-function downloadCSV(rows: Record<string, unknown>[], filename: string) {
-  if (!rows.length) return;
-  const headers = Object.keys(rows[0]);
-  const escape = (v: unknown) => {
-    const s = v == null ? "" : String(v);
-    return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s.replace(/"/g, '""')}"` : s;
-  };
-  const csv = [headers.join(","), ...rows.map(r => headers.map(h => escape(r[h])).join(","))].join("\n");
-  const a = Object.assign(document.createElement("a"), {
-    href: URL.createObjectURL(new Blob([csv], { type: "text/csv" })),
-    download: filename,
-  });
-  a.click(); URL.revokeObjectURL(a.href);
-}
 
 interface Stats {
   total_users: number;

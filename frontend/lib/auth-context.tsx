@@ -77,7 +77,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error("Cannot reach the server. Make sure the backend is running.");
     }
     if (res.status === 401) throw new Error("Incorrect email or password.");
-    if (!res.ok) throw new Error(`Login failed (${res.status}).`);
+    if (!res.ok) {
+      // Surface the server's own explanation (e.g. "Database unavailable")
+      // rather than a bare status code.
+      const detail = await res.json().then(d => d?.detail).catch(() => null);
+      throw new Error(detail ?? `Login failed (${res.status}).`);
+    }
     const { access_token, user: loginUser } =
       await res.json() as { access_token: string; user?: User };
     setToken(access_token);

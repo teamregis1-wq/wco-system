@@ -11,6 +11,36 @@ import ForecastChart from "@/components/ForecastChart";
 import type { ForecastPoint } from "@/lib/api";
 import { toast, Toaster } from "@/components/Toast";
 import {
+  parseCSV, validateEstablishments, validateWcoRecords,
+  downloadCSV, downloadEstablishmentTemplate, downloadWcoTemplate,
+  type RowError,
+} from "@/lib/csv";
+
+// ── Rejected-row report ───────────────────────────────────────────────────────
+// Import never fails silently: every row the validator rejected is listed with
+// its source line number and the reason.
+
+function ImportErrors({ errors }: { errors: RowError[] }) {
+  if (!errors.length) return null;
+  const shown = errors.slice(0, 8);
+  return (
+    <div style={{
+      marginBottom: 12, padding: "9px 12px", background: "#fffbeb",
+      border: "1px solid #fde68a", borderRadius: 8, fontSize: 11.5, color: "#92400e",
+    }}>
+      <div style={{ fontWeight: 700, marginBottom: 5 }}>
+        {errors.length} row{errors.length !== 1 ? "s" : ""} skipped — fix and re-import:
+      </div>
+      <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.65 }}>
+        {shown.map((e, i) => <li key={i}>Line {e.line}: {e.message}</li>)}
+      </ul>
+      {errors.length > shown.length && (
+        <div style={{ marginTop: 4, color: "#b45309" }}>…and {errors.length - shown.length} more.</div>
+      )}
+    </div>
+  );
+}
+import {
   BarChart, Bar, LineChart, Line,
   XAxis, YAxis, CartesianGrid, Tooltip as RCTooltip,
   ResponsiveContainer, ReferenceLine,
@@ -18,23 +48,8 @@ import {
 
 const LocationPicker = dynamic(() => import("@/components/LocationPicker"), { ssr: false });
 
-// ── CSV export helper ─────────────────────────────────────────────────────────
-
-function downloadCSV(rows: Record<string, unknown>[], filename: string) {
-  if (!rows.length) return;
-  const headers = Object.keys(rows[0]);
-  const escape = (v: unknown) => {
-    const s = v == null ? "" : String(v);
-    return s.includes(",") || s.includes('"') || s.includes("\n")
-      ? `"${s.replace(/"/g, '""')}"` : s;
-  };
-  const csv = [headers.join(","), ...rows.map(r => headers.map(h => escape(r[h])).join(","))].join("\n");
-  const a = Object.assign(document.createElement("a"), {
-    href: URL.createObjectURL(new Blob([csv], { type: "text/csv" })),
-    download: filename,
-  });
-  a.click(); URL.revokeObjectURL(a.href);
-}
+// CSV parsing, validation, and export all live in lib/csv.ts so the two
+// importers below share one RFC 4180 parser and one set of validation rules.
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -366,6 +381,7 @@ function WCORecordsModal({
   const [editBusy,     setEditBusy]     = useState(false);
   const [bulkStatus,   setBulkStatus]   = useState<string | null>(null);
   const [bulkImporting,setBulkImporting]= useState(false);
+  const [bulkErrors,  setBulkErrors]  = useState<RowError[]>([]);
   const [completeness, setCompleteness] = useState<WCOCompleteness | null>(null);
   const [monthlyTotals,setMonthlyTotals]= useState<MonthlyTotal[]>([]);
   const wcoFileRef = useRef<HTMLInputElement>(null);
@@ -450,38 +466,34 @@ function WCORecordsModal({
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = "";
-    setBulkImporting(true); setBulkStatus(null);
-    const text = await file.text();
-    const lines = text.trim().split(/\r?\n/);
-    if (lines.length < 2) { setBulkImporting(false); setBulkStatus("CSV empty or missing header."); return; }
-    const headers = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/^"|"$/g, ""));
-    const rows = lines.slice(1).filter(l => l.trim()).map(line => {
-      const vals = line.split(",").map(v => v.trim().replace(/^"|"$/g, ""));
-      const row: Record<string, string> = {};
-      headers.forEach((h, i) => { row[h] = vals[i] ?? ""; });
-      return row;
-    });
-    const find = (row: Record<string, string>, ...keys: string[]) => {
-      for (const k of keys) { const v = row[k]; if (v != null) return v; } return "";
-    };
-    const payload = rows.map(row => ({
-      establishment_id: establishment.id,
-      week_date: find(row, "week_date", "date", "week"),
-      week_end_date: find(row, "week_end_date", "end_date") || null,
-      quantity_liters: parseFloat(find(row, "quantity_liters", "quantity", "liters")),
-      notes: find(row, "notes") || null,
-    })).filter(r => r.week_date && !isNaN(r.quantity_liters));
-    if (!payload.length) { setBulkImporting(false); setBulkStatus("No valid rows. Headers: week_date,quantity_liters,notes"); return; }
+    setBulkImporting(true); setBulkStatus(null); setBulkErrors([]);
     try {
+      const parsed = parseCSV(await file.text());
+      if (!parsed.rows.length) {
+        setBulkStatus("No data rows found. The file needs a header row plus at least one record.");
+        return;
+      }
+      const { valid, errors } = validateWcoRecords(parsed, establishment.id);
+      setBulkErrors(errors);
+
+      if (!valid.length) {
+        setBulkStatus(`No valid rows. Required columns: week_date, quantity_liters (optional: week_end_date, notes).`);
+        return;
+      }
       const res = await apiFetch<{ imported: number; skipped: number }>("/wco/records/bulk", {
-        method: "POST", body: JSON.stringify(payload),
+        method: "POST", body: JSON.stringify(valid),
       });
-      setBulkStatus(`${res.imported} imported, ${res.skipped} skipped.`);
+      const parts = [`${res.imported} imported`];
+      if (res.skipped) parts.push(`${res.skipped} already existed`);
+      if (errors.length) parts.push(`${errors.length} rejected`);
+      setBulkStatus(parts.join(", ") + ".");
       toast(`${res.imported} WCO record${res.imported !== 1 ? "s" : ""} imported.`);
       await loadRecords();
       onRecordChanged?.();
-    } catch (err) { setBulkStatus(String(err).replace(/^(Type)?Error:\s*/, "")); toast(String(err).replace(/^(Type)?Error:\s*/, ""), "error"); }
-    finally { setBulkImporting(false); }
+    } catch (err) {
+      const msg = String(err).replace(/^(Type)?Error:\s*/, "");
+      setBulkStatus(msg); toast(msg, "error");
+    } finally { setBulkImporting(false); }
   }
 
   const totalLiters = records.reduce((sum, r) => sum + r.quantity_liters, 0);
@@ -505,7 +517,32 @@ function WCORecordsModal({
               >
                 {bulkImporting ? "Importing…" : "Import CSV"}
               </button>
+              <button
+                onClick={downloadWcoTemplate}
+                title="Download a CSV with the correct headers and example rows"
+                style={{ ...ghostBtn, fontSize: 11, padding: "5px 12px" }}
+              >
+                Template
+              </button>
             </RoleGuard>
+            <button
+              onClick={() => downloadCSV(
+                [...records]
+                  .sort((a, b) => a.week_date.localeCompare(b.week_date))
+                  .map(r => ({
+                    week_date: r.week_date,
+                    week_end_date: r.week_end_date ?? "",
+                    quantity_liters: r.quantity_liters,
+                    notes: r.notes ?? "",
+                  })),
+                `${establishment.wco_code}_wco_records.csv`,
+              )}
+              disabled={!records.length}
+              title="Export these records as CSV (same columns the importer accepts)"
+              style={{ ...ghostBtn, fontSize: 11, padding: "5px 12px", opacity: records.length ? 1 : 0.45 }}
+            >
+              Export CSV
+            </button>
             <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: "#94a3b8", padding: "2px 6px" }}>✕</button>
           </div>
         </div>
@@ -514,6 +551,7 @@ function WCORecordsModal({
             {bulkStatus}
           </div>
         )}
+        <ImportErrors errors={bulkErrors} />
 
         {/* Completeness badge */}
         {completeness && (
@@ -1119,6 +1157,7 @@ function EstablishmentsContent() {
   const [sortDir,        setSortDir]        = useState<"asc" | "desc">("asc");
   const [importStatus,   setImportStatus]   = useState<string | null>(null);
   const [importing,      setImporting]      = useState(false);
+  const [importErrors,   setImportErrors]   = useState<RowError[]>([]);
   const [lastCollection, setLastCollection] = useState<Record<string, string>>({});
   const [exportOpen,     setExportOpen]     = useState(false);
   const estabFileRef = useRef<HTMLInputElement>(null);
@@ -1235,39 +1274,33 @@ function EstablishmentsContent() {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = "";
-    setImporting(true); setImportStatus(null);
-    const text = await file.text();
-    const lines = text.trim().split(/\r?\n/);
-    if (lines.length < 2) { setImporting(false); setImportStatus("CSV empty or missing header."); return; }
-    const headers = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/^"|"$/g, ""));
-    const rows = lines.slice(1).filter(l => l.trim()).map(line => {
-      const vals = line.split(",").map(v => v.trim().replace(/^"|"$/g, ""));
-      const row: Record<string, string> = {};
-      headers.forEach((h, i) => { row[h] = vals[i] ?? ""; });
-      return row;
-    });
-    const find = (row: Record<string, string>, ...keys: string[]) => {
-      for (const k of keys) { const v = row[k]; if (v != null) return v; } return "";
-    };
-    const payload = rows.map(row => ({
-      wco_code: find(row, "wco_code", "code"),
-      name: find(row, "name"),
-      type: find(row, "type") || "restaurant",
-      latitude: parseFloat(find(row, "latitude", "lat")),
-      longitude: parseFloat(find(row, "longitude", "lng", "lon")),
-      barangay: find(row, "barangay") || null,
-      consent_given: true,
-    })).filter(r => r.wco_code && r.name && !isNaN(r.latitude) && !isNaN(r.longitude));
-    if (!payload.length) { setImporting(false); setImportStatus("No valid rows found. Check headers: wco_code,name,type,latitude,longitude,barangay"); return; }
+    setImporting(true); setImportStatus(null); setImportErrors([]);
     try {
+      const parsed = parseCSV(await file.text());
+      if (!parsed.rows.length) {
+        setImportStatus("No data rows found. The file needs a header row plus at least one record.");
+        return;
+      }
+      const { valid, errors } = validateEstablishments(parsed);
+      setImportErrors(errors);
+
+      if (!valid.length) {
+        setImportStatus("No valid rows. Required columns: wco_code, name, type, latitude, longitude.");
+        return;
+      }
       const res = await apiFetch<{ imported: number; skipped: number }>("/establishments/bulk", {
-        method: "POST", body: JSON.stringify(payload),
+        method: "POST", body: JSON.stringify(valid),
       });
-      setImportStatus(`${res.imported} imported, ${res.skipped} skipped.`);
+      const parts = [`${res.imported} imported`];
+      if (res.skipped) parts.push(`${res.skipped} already existed`);
+      if (errors.length) parts.push(`${errors.length} rejected`);
+      setImportStatus(parts.join(", ") + ".");
       toast(`${res.imported} establishment${res.imported !== 1 ? "s" : ""} imported.`);
       await load();
-    } catch (err) { setImportStatus(String(err).replace(/^(Type)?Error:\s*/, "")); toast(String(err).replace(/^(Type)?Error:\s*/, ""), "error"); }
-    finally { setImporting(false); }
+    } catch (err) {
+      const msg = String(err).replace(/^(Type)?Error:\s*/, "");
+      setImportStatus(msg); toast(msg, "error");
+    } finally { setImporting(false); }
   }
 
   function exportGeoJSON() {
@@ -1368,8 +1401,16 @@ function EstablishmentsContent() {
                     color: "#374151",
                     action: () => {
                       downloadCSV(sorted.map(e => ({
-                        wco_code: e.wco_code, name: e.name, type: e.type,
-                        barangay: e.barangay ?? "", latitude: e.latitude, longitude: e.longitude,
+                        wco_code: e.wco_code,
+                        name: e.name,
+                        type: e.type,
+                        latitude: e.latitude,
+                        longitude: e.longitude,
+                        address: e.address ?? "",
+                        barangay: e.barangay ?? "",
+                        business_hours: e.business_hours ?? "",
+                        seating_capacity: e.seating_capacity ?? "",
+                        contact_info: e.contact_info ?? "",
                         status: e.is_active ? "active" : "inactive",
                         last_collection: lastCollection[e.id] ?? "",
                       })), "establishments.csv");
@@ -1408,6 +1449,13 @@ function EstablishmentsContent() {
           >
             {importing ? "Importing…" : "Import CSV"}
           </button>
+          <button
+            onClick={downloadEstablishmentTemplate}
+            title="Download a CSV with the correct headers and an example row"
+            style={{ ...ghostBtn, fontSize: 11, padding: "4px 10px" }}
+          >
+            Template
+          </button>
         </RoleGuard>
         {importStatus && <span style={{ fontSize: 11, color: importStatus.includes("imported") ? "#0f6e56" : "#dc2626", fontWeight: 600 }}>{importStatus}</span>}
         <span style={{ fontSize: 12, color: "#94a3b8" }}>{sorted.length} shown</span>
@@ -1420,6 +1468,8 @@ function EstablishmentsContent() {
           </button>
         )}
       </div>
+
+      <ImportErrors errors={importErrors} />
 
       {/* Batch action bar */}
       {selected.size > 0 && (

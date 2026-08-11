@@ -3,14 +3,20 @@
 Run locally with:  uvicorn app.main:app --reload
 Then open http://localhost:8000/docs for interactive API documentation.
 """
+import logging
 import threading
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.config import settings
 from app.routers import analysis, auth, establishments, forecast, gis, quality_tests, wco
 from app.routers import biodiesel_router as biodiesel
+
+logger = logging.getLogger("wco")
 
 app = FastAPI(title=settings.project_name)
 
@@ -31,6 +37,37 @@ def warm_db_pool() -> None:
 
     threading.Thread(target=_warm, daemon=True).start()
 
+
+class ErrorEnvelopeMiddleware(BaseHTTPMiddleware):
+    """Return unhandled errors as JSON instead of a bare 500.
+
+    Starlette's default 500 handler sits *outside* CORSMiddleware, so its
+    response carries no CORS headers — the browser then blocks it and the
+    frontend sees a network failure ("cannot reach the server") rather than the
+    real cause. Catching here, inside the CORS layer, means the error response
+    is decorated normally and the UI can show what actually went wrong.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        try:
+            return await call_next(request)
+        except OperationalError:
+            logger.exception("Database unavailable during %s %s", request.method, request.url.path)
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "Database unavailable. Check the database connection and try again."},
+            )
+        except SQLAlchemyError:
+            logger.exception("Database error during %s %s", request.method, request.url.path)
+            return JSONResponse(status_code=500, content={"detail": "A database error occurred."})
+        except Exception:
+            logger.exception("Unhandled error during %s %s", request.method, request.url.path)
+            return JSONResponse(status_code=500, content={"detail": "Internal server error."})
+
+
+# Registration order matters: Starlette treats the LAST-added middleware as the
+# outermost layer, so CORS must be added after the error handler to wrap it.
+app.add_middleware(ErrorEnvelopeMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
