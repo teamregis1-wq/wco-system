@@ -211,6 +211,28 @@ function FitBounds({ hotspots }: { hotspots: GiHotspot[] }) {
   return null;
 }
 
+/**
+ * Keep Leaflet's cached container size in sync with the actual element.
+ *
+ * Leaflet measures its container once and caches the result, so collapsing the
+ * side panel leaves the map rendering at its old width with a blank strip where
+ * the panel used to be. A ResizeObserver fires continuously through the 250 ms
+ * width transition, so the map grows with the panel instead of snapping — and
+ * it covers any other layout change (window resize, zoom) for free.
+ */
+function AutoResize() {
+  const map = useMap();
+  useEffect(() => {
+    const container = map.getContainer();
+    const observer = new ResizeObserver(() => {
+      map.invalidateSize({ animate: false });
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [map]);
+  return null;
+}
+
 function ResetViewControl({ hotspots, tick }: { hotspots: GiHotspot[]; tick: number }) {
   const map = useMap();
   const prevTick = useRef(0);
@@ -404,6 +426,7 @@ export default function WCOMap() {
           )}
 
           {/* Click anywhere on the map to select the nearest establishment */}
+          <AutoResize />
           <MapClickHandler markers={markers} onSelect={loadForecast} />
 
           {/* All establishment markers — Gi*-scored where data exists */}
