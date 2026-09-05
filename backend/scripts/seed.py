@@ -1,6 +1,6 @@
 """Seed the database with realistic synthetic data.
 
-Run AFTER migrations:  python -m app.seed
+Run AFTER migrations:  python -m scripts.seed
 
 Generates:
   - 1 admin user (admin@wco.local / admin12345)

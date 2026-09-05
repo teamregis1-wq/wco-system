@@ -1,206 +1,171 @@
-# WCO Predictive Mapping System — Starter Scaffold
+# WCO Atlas
 
-AI-enabled predictive mapping for waste cooking oil (WCO) generation and biodiesel
-production modeling in Lipa City, Batangas.
+Waste Cooking Oil Predictive Mapping System for **Batangas City** — spatial hotspot
+analysis, three-month generation forecasting, and road-accurate collection routing.
 
-This is a **working starter scaffold**, not the finished system. It boots, authenticates,
-serves an interactive map of seeded establishments with hotspot coloring, and has a
-forecast endpoint ready to load your trained LSTM. Your job over the next ~14 weeks is
-to flesh out each module. The hard parts (real KDE/Gi*, OSMnx routing, the trained model)
-are marked with `TODO` in the code.
+A private system: every page requires an account.
 
 ---
 
-## What's in the box
+## Quick start
+
+Two terminals. The backend must be running before the frontend can load data.
+
+```bash
+# Terminal 1 — backend  (http://localhost:8000)
+cd backend
+./venv/bin/uvicorn app.main:app --reload --port 8000
+
+# Terminal 2 — frontend (http://localhost:3000)
+cd frontend
+npm run dev
+```
+
+Then open <http://localhost:3000>. Development sign-in: `admin@wco.local` / `admin12345`.
+
+API documentation is served at <http://localhost:8000/docs>.
+
+---
+
+## Repository layout
 
 ```
 wco-system/
-├── backend/                  FastAPI + SQLAlchemy + PostGIS
-│   ├── app/
-│   │   ├── core/             config, database, security (JWT, bcrypt)
-│   │   ├── models/           all 12 database tables
-│   │   ├── routers/          auth, establishments, forecast, gis, analysis
-│   │   ├── schemas/          Pydantic request/response shapes
-│   │   ├── services/         forecasting (loads your trained LSTM)
-│   │   ├── seed.py           generates 120 establishments + 52 weeks of data
-│   │   └── main.py           app entry point
-│   ├── alembic/              database migrations
-│   ├── requirements.txt
-│   └── .env.example
-├── frontend/                 Next.js 14 + React-Leaflet + Recharts
-│   ├── app/                  pages (login + mapping)
-│   ├── components/           WCOMap, ForecastChart
-│   ├── lib/api.ts            typed API client
-│   └── .env.local.example
-└── notebooks/
-    └── lstm_training.ipynb   train the LSTM in Google Colab, export weights
+├── backend/                     FastAPI · SQLAlchemy · PostGIS
+│   ├── app/                       application code only
+│   │   ├── core/                  config, database engine, security, cache, audit
+│   │   ├── models/                SQLAlchemy tables
+│   │   ├── routers/               HTTP endpoints, one file per resource
+│   │   ├── schemas/               Pydantic request/response shapes + validation
+│   │   ├── services/              forecasting (LSTM training and inference)
+│   │   │   └── model_artifacts/   trained weights + scaler
+│   │   └── main.py                app entry point, middleware, router registration
+│   ├── alembic/versions/          database migrations, applied in order
+│   ├── data/                      seed and export CSVs
+│   ├── scripts/                   one-off operational scripts (not imported by the app)
+│   └── requirements.txt
+│
+├── frontend/                    Next.js 14 (App Router) · TypeScript · Leaflet
+│   ├── app/                       one folder per page/route
+│   │   ├── page.tsx               landing page (public)
+│   │   ├── map/                   hotspot map + KDE heatmap
+│   │   ├── dashboard/             city-wide analytics
+│   │   ├── establishments/        registry, WCO records, CSV import/export
+│   │   ├── routes/                collection route planner
+│   │   └── admin/                 user management, audit log
+│   ├── components/                shared UI (map, charts, navbar, auth popover)
+│   └── lib/                       auth context, CSV parsing/validation, fonts
+│
+└── notebooks/                   LSTM training exploration
 ```
+
+**Where to change things**
+
+| To change… | Edit |
+|---|---|
+| An API endpoint | `backend/app/routers/<resource>.py` |
+| A database table | `backend/app/models/` + a new Alembic migration |
+| Request validation | `backend/app/schemas/schemas.py` |
+| Hotspot / KDE maths | `backend/app/routers/gis.py` |
+| Forecasting model | `backend/app/services/forecasting.py` |
+| Route optimisation | `backend/app/routers/analysis.py` |
+| A page's UI | `frontend/app/<page>/page.tsx` |
+| The map | `frontend/components/WCOMap.tsx` |
+| CSV import rules | `frontend/lib/csv.ts` |
 
 ---
 
-## Prerequisites (macOS)
+## Setup from scratch
 
-Install these once. If you have Homebrew, the first block covers everything.
-
-```bash
-# Homebrew (skip if already installed)
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-brew install python@3.11 node git
-# GDAL/GEOS/PROJ — needed later for OSMnx (routing) and geospatial libs.
-# Installing now saves pain during the GIS sprint.
-brew install gdal geos proj spatialindex
-```
-
-You also need a free **Supabase** account (supabase.com) for the PostgreSQL + PostGIS
-database. Everything else runs locally.
-
----
-
-## Setup — do these in order
-
-### 1. Create the Supabase database
-
-1. Create a new project at supabase.com (free tier is fine).
-2. In the project's SQL Editor, run:
-   ```sql
-   create extension if not exists postgis;
-   ```
-3. Go to Project Settings → Database → Connection string → **URI**. Copy it.
-   It looks like `postgresql://postgres:[PASSWORD]@[HOST]:5432/postgres`.
-
-### 2. Backend
+### Backend
 
 ```bash
 cd backend
 python3.11 -m venv venv
-source venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
-
-cp .env.example .env
+./venv/bin/pip install -r requirements.txt
 ```
 
-Now edit `.env`:
-- Set `DATABASE_URL` to your Supabase URI, but **change the scheme** from
-  `postgresql://` to `postgresql+psycopg://` so SQLAlchemy uses the psycopg 3 driver.
-- Generate a real `JWT_SECRET`:
-  ```bash
-  python -c "import secrets; print(secrets.token_hex(32))"
-  ```
+Create `backend/.env` (never committed):
 
-Create the database tables and seed them:
+```
+DATABASE_URL=postgresql+psycopg://<user>:<password>@<host>:5432/postgres
+CORS_ORIGINS=http://localhost:3000,http://localhost:3001
+```
+
+> Use Supabase's **Session pooler** connection string, not the direct one. The direct
+> host is IPv6-only and fails on networks without IPv6.
+
+Then create the schema and load data:
 
 ```bash
-# Generate the first migration from the models, then apply it
-alembic revision --autogenerate -m "initial schema"
-alembic upgrade head
-
-# Fill the database with 120 establishments + ~6,240 WCO records
-python -m app.seed
+./venv/bin/python -c "from sqlalchemy import create_engine, text; \
+  from dotenv import dotenv_values; \
+  create_engine(dotenv_values('.env')['DATABASE_URL']).connect().execute(text('CREATE EXTENSION IF NOT EXISTS postgis'))"
+./venv/bin/alembic upgrade head
+./venv/bin/python -m scripts.import_real_establishments   # see "Seeding" below
 ```
 
-Start the API:
-
-```bash
-uvicorn app.main:app --reload
-```
-
-Open **http://localhost:8000/docs** — you should see interactive API docs.
-Hit `/health` first to confirm it's alive. Then try `POST /api/v1/auth/login`
-with `admin@wco.local` / `admin12345`.
-
-### 3. Frontend
-
-In a **new terminal** (leave the backend running):
+### Frontend
 
 ```bash
 cd frontend
 npm install
-cp .env.local.example .env.local   # default points at localhost:8000
-npm run dev
+cp .env.local.example .env.local     # then set NEXT_PUBLIC_API_BASE
 ```
 
-Open **http://localhost:3000**. Log in with `admin@wco.local` / `admin12345`.
-You'll see the Lipa City map with color-coded hotspots from your seeded data.
+---
 
-### 4. Train the LSTM (when you're ready — forecasting sprint)
+## Seeding
 
-1. Export the seeded data to CSV (run in `backend/` with the venv active):
-   ```bash
-   python -c "
-   from app.core.database import SessionLocal
-   from app.models.wco import WCOGenerationRecord
-   from sqlalchemy import select
-   import pandas as pd
-   db = SessionLocal()
-   rows = db.scalars(select(WCOGenerationRecord)).all()
-   pd.DataFrame([{'establishment_id': r.establishment_id, 'week_date': r.week_date, 'quantity_liters': r.quantity_liters} for r in rows]).to_csv('wco_export.csv', index=False)
-   print('wrote wco_export.csv')
-   "
-   ```
-2. Open `notebooks/lstm_training.ipynb` in Google Colab (File → Upload notebook).
-3. Set the runtime to GPU (Runtime → Change runtime type → GPU).
-4. Run all cells, upload `wco_export.csv` when prompted.
-5. Download `lstm_wco.pt` and `scaler.npz`, drop them into
-   `backend/app/services/model_artifacts/`.
-6. Restart the backend. The forecast dropdown on the map page now works.
+Two scripts populate the database. **They are not interchangeable:**
 
-> The model class in the notebook and in `app/services/forecasting.py` must stay
-> identical. If you change `HIDDEN_SIZE` etc. in one, change it in both.
+| Script | Coordinates | Use for |
+|---|---|---|
+| `scripts/import_real_establishments.py` | **Real, verified** locations of actual Batangas City establishments | Demos, presentations, anything shown to others |
+| `scripts/seed.py` | Randomly scattered around a centre point — some land in the bay | Throwaway local testing only |
+
+```bash
+cd backend
+./venv/bin/python -m scripts.import_real_establishments
+```
+
+Both wipe and regenerate the data tables, so never run either against production data.
 
 ---
 
-## The build plan (your ~14 weeks)
+## Common tasks
 
-| Weeks | Focus | What to build |
-|------|-------|---------------|
-| 1–2 | Foundation | This scaffold running; learn FastAPI + Next.js against the real schema |
-| 3–4 | Data + biodiesel | Establishment/WCO data entry UI, CSV import, biodiesel dashboard (easy, pulled forward) |
-| 5–6 | Forecasting | Train LSTM in Colab (runs in background while you build UI) |
-| 7–9 | GIS + hotspots | Real KDE (scipy) + Local Gi* (PySAL); upgrade `gis.py` |
-| 10–11 | Routing | OSMnx road import + NetworkX Dijkstra; fill in `analysis.py` route stub |
-| 12 | Integration | Wire forecast → hotspot → route flow; reporting/export |
-| 13–14 | Deploy + defense | Ship, screenshots, demo script, dry runs |
+```bash
+cd backend
 
-**Safety valve:** the project plan's own risk register allows an ARIMA fallback if the
-LSTM underperforms. A working simple model beats a broken sophisticated one at a defense.
-The `ForecastRun.model_type` column already supports `'arima'`.
+# apply new migrations
+./venv/bin/alembic upgrade head
 
----
+# create a migration after changing a model
+./venv/bin/alembic revision --autogenerate -m "describe the change"
 
-## Deployment (week 13)
+# export all WCO records to data/wco_export.csv
+./venv/bin/python -m scripts.export_csv
+```
 
-- **Frontend → Vercel.** Connect the GitHub repo, set `NEXT_PUBLIC_API_BASE` env var to
-  your backend URL. Auto-deploys on push.
-- **Backend → Railway or Render** (NOT Vercel). Vercel's serverless functions time out
-  and choke on PyTorch/OSMnx/SciPy. Railway/Render run a persistent container with no
-  timeout. Add a `Procfile` with:
-  `web: uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-  and set your env vars (`DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGINS` = your Vercel URL).
-- **Database → Supabase** stays as-is (it's already managed and cloud-hosted).
+Retrain the forecasting model from the running app: **Dashboard → Train Model**, or
+`POST /api/v1/forecast/train`. Training writes to `app/services/model_artifacts/`
+and records MAE, RMSE, R², and MAPE.
 
 ---
 
-## Common gotchas
+## Deployment
 
-- **`alembic upgrade` fails with "type geometry does not exist"** → you forgot to run
-  `create extension postgis;` in Supabase (step 1.2).
-- **Login works in /docs but frontend login fails** → CORS. Make sure
-  `CORS_ORIGINS=http://localhost:3000` is in the backend `.env`.
-- **Map is blank** → check the browser console; usually the backend isn't running or
-  `NEXT_PUBLIC_API_BASE` is wrong in `.env.local`.
-- **Forecast returns 503** → expected until you add the trained model files (step 4).
-- **OSMnx install errors during the GIS sprint** → that's why we `brew install gdal geos proj`
-  up front. If it still fails, `pip install osmnx` after `brew install` usually resolves it.
+- **Frontend** deploys to Vercel from `main`. Root Directory must be set to `frontend`
+  in project settings, and `NEXT_PUBLIC_API_BASE` set in environment variables.
+- **Backend** has a `Procfile` ready for Railway or Render. Set `DATABASE_URL` and add
+  the deployed frontend's origin to `CORS_ORIGINS`.
 
 ---
 
-## Default credentials (development only)
+## Notes
 
-| Email | Password | Role |
-|-------|----------|------|
-| admin@wco.local | admin12345 | admin |
-| researcher@wco.local | research12345 | researcher |
-
-Change these before any public deployment.
+- `backend/.env` and `frontend/.env.local` hold credentials and are gitignored. Never commit them.
+- Row Level Security is enabled on all application tables via migration. The app connects
+  as the table owner and bypasses it; RLS only blocks Supabase's auto-generated REST API.
+- Roles are `admin` (full access), `researcher` (read and edit), and `viewer` (read only).

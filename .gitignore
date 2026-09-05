@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+
+# Editors
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# Node / Next.js
+node_modules/
+.next/
+*.tsbuildinfo
+
+# Environment files — never commit credentials
+.env
+.env.local

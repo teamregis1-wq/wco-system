@@ -14,7 +14,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.config import settings
 from app.routers import analysis, auth, establishments, forecast, gis, quality_tests, wco
-from app.routers import biodiesel_router as biodiesel
 
 logger = logging.getLogger("wco")
 
@@ -84,7 +83,6 @@ app.include_router(gis.router, prefix=prefix)
 app.include_router(analysis.router, prefix=prefix)
 app.include_router(wco.router, prefix=prefix)
 app.include_router(quality_tests.router, prefix=prefix)
-app.include_router(biodiesel.router, prefix=prefix)
 
 
 @app.get("/health", tags=["health"])

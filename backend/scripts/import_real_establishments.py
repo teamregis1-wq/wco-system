@@ -13,7 +13,7 @@ variance and learns meaningful patterns.
   fast_food:         base 40–80 L/week  (vs v2's narrow 44–66)
   food_manufacturer: base 70–120 L/week (vs v2's narrow 72–108)
 
-Run from backend/:  python -m app.import_final
+Run from backend/:  python -m scripts.import_real_establishments
 """
 import math
 import random
@@ -319,7 +319,7 @@ def main():
         print(f"  Quality tests        : {total_e}")
         print(f"{'='*45}")
         print("Next steps:")
-        print("  1. python -m app.export_csv")
+        print("  1. python -m scripts.export_csv")
         print("  2. Upload new CSV to Colab and retrain")
         print("  3. Restart backend: uvicorn app.main:app --reload")
 
