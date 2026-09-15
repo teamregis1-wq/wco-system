@@ -15,13 +15,13 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import get_current_user, require_role
-from app.models.analysis import CandidateSite, SavedRoute
+from app.core.security import get_current_user
+from app.models.analysis import SavedRoute
 from app.models.establishment import Establishment
 from app.models.wco import WCOGenerationRecord
 from app.schemas.schemas import (
     CollectionRouteRequest, CollectionRouteResponse, RouteStop,
-    CandidateSiteOut, CandidateSiteCreate, CollectionRouteResponseV2,
+    CollectionRouteResponseV2,
     SavedRouteCreate, SavedRouteOut,
 )
 
@@ -278,58 +278,4 @@ def delete_saved_route(
     if not route:
         raise HTTPException(status_code=404, detail="Saved route not found.")
     db.delete(route)
-    db.commit()
-
-
-# ── Candidate collection sites ───────────────────────────────────────────────
-
-@router.get("/candidate-sites", response_model=list[CandidateSiteOut])
-def list_candidate_sites(
-    db: Session = Depends(get_db),
-    _=Depends(get_current_user),
-):
-    sites = db.scalars(select(CandidateSite).order_by(CandidateSite.id)).all()
-    if not sites:
-        defaults = [
-            CandidateSite(name="Batangas City Hall", latitude=13.7565, longitude=121.0583,
-                          rationale="Central government hub; accessible from all barangays"),
-            CandidateSite(name="BREDCO Port Area", latitude=13.7610, longitude=121.0720,
-                          rationale="Industrial zone; proximity to fuel transport infrastructure"),
-            CandidateSite(name="Batangas Public Market", latitude=13.7540, longitude=121.0580,
-                          rationale="High food-establishment density; frequent WCO source"),
-            CandidateSite(name="Bolbok Industrial Estate", latitude=13.7380, longitude=121.0690,
-                          rationale="Near fuel distributors; large processing space available"),
-            CandidateSite(name="BatStateU Main Campus", latitude=13.7860, longitude=121.0680,
-                          rationale="Research partner; existing laboratory infrastructure"),
-        ]
-        for s in defaults:
-            db.add(s)
-        db.commit()
-        sites = db.scalars(select(CandidateSite).order_by(CandidateSite.id)).all()
-    return list(sites)
-
-
-@router.post("/candidate-sites", response_model=CandidateSiteOut, status_code=201)
-def create_candidate_site(
-    payload: CandidateSiteCreate,
-    db: Session = Depends(get_db),
-    _=Depends(require_role("admin", "researcher")),
-):
-    site = CandidateSite(**payload.model_dump())
-    db.add(site)
-    db.commit()
-    db.refresh(site)
-    return site
-
-
-@router.delete("/candidate-sites/{site_id}", status_code=204)
-def delete_candidate_site(
-    site_id: int,
-    db: Session = Depends(get_db),
-    _=Depends(require_role("admin")),
-):
-    site = db.get(CandidateSite, site_id)
-    if not site:
-        raise HTTPException(status_code=404, detail="Candidate site not found.")
-    db.delete(site)
     db.commit()

@@ -4,6 +4,7 @@ Final Batangas City establishment import.
 Strategy:
   - Real, verified coordinates for all 120 establishments (map accuracy)
   - High-variance synthetic WCO data for LSTM training (R² target: 0.92+)
+  - Development sign-in accounts, created only if they don't already exist
 
 Key difference from v2: each establishment gets a unique base volume
 drawn from a WIDE range within its type, so the LSTM sees genuine
@@ -23,8 +24,9 @@ from geoalchemy2.functions import ST_SetSRID, ST_MakePoint
 from sqlalchemy import delete
 
 from app.core.database import SessionLocal, engine, Base
+from app.core.security import hash_password
 from app.models import (
-    Establishment, WCOGenerationRecord, WCOQualityTest,
+    User, Establishment, WCOGenerationRecord, WCOQualityTest,
     CandidateSite, ForecastRun, ForecastResult, RouteResult,
     SimulationRun, OptimizationResult,
 )
@@ -286,11 +288,32 @@ def seed_sites(db):
     print(f"  Candidate sites: {len(sites)}")
 
 
+DEV_USERS = [
+    ("admin@wco.local",      "System Admin",  "admin12345",    "admin"),
+    ("researcher@wco.local", "Research Lead", "research12345", "researcher"),
+]
+
+
+def seed_users(db):
+    """Create the development accounts. Skips any that already exist, so the
+    script can be re-run without hitting the unique-email constraint."""
+    existing = {email for (email,) in db.query(User.email).all()}
+    created = []
+    for email, name, password, role in DEV_USERS:
+        if email not in existing:
+            db.add(User(email=email, full_name=name,
+                        hashed_password=hash_password(password), role=role))
+            created.append(email)
+    db.commit()
+    print(f"  accounts: {', '.join(created) if created else 'already present'}")
+
+
 def main():
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:
         clear(db)
+        seed_users(db)
         total_e, total_r = 0, 0
 
         print(f"Importing {len(RESTAURANTS)} restaurants...")

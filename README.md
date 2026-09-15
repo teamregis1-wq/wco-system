@@ -93,7 +93,10 @@ CORS_ORIGINS=http://localhost:3000,http://localhost:3001
 ```
 
 > Use Supabase's **Session pooler** connection string, not the direct one. The direct
-> host is IPv6-only and fails on networks without IPv6.
+> host is IPv6-only and fails on networks without IPv6. With the pooler the user is
+> `postgres.<project-ref>`, and the scheme must be `postgresql+psycopg://` — plain
+> `postgresql://` looks for the psycopg2 driver, which is not installed.
+> Percent-encode any special characters in the password (e.g. `@` → `%40`).
 
 Then create the schema and load data:
 
@@ -130,6 +133,9 @@ cd backend
 ```
 
 Both wipe and regenerate the data tables, so never run either against production data.
+`import_real_establishments.py` also creates the development accounts
+(`admin@wco.local`, `researcher@wco.local`) if they don't already exist, and leaves
+existing user accounts untouched.
 
 ---
 

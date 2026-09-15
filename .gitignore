@@ -19,3 +19,6 @@ node_modules/
 # Environment files — never commit credentials
 .env
 .env.local
+
+# Claude Code local settings (machine-specific paths)
+.claude/

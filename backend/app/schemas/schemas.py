@@ -235,22 +235,6 @@ class WCOCompletenessOut(BaseModel):
     first_record_date: str | None
     last_record_date: str | None
 
-# --- Candidate sites ---------------------------------------------------------
-
-class CandidateSiteOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: int
-    name: str
-    latitude: float
-    longitude: float
-    rationale: str | None
-
-class CandidateSiteCreate(BaseModel):
-    name: str
-    latitude: float
-    longitude: float
-    rationale: str | None = None
-
 # --- Aggregate forecast ------------------------------------------------------
 
 class AggregateForecastPoint(BaseModel):
