@@ -30,8 +30,7 @@ Then open <http://localhost:3000> and sign in with an account created by
 API documentation is served at <http://localhost:8000/api/docs>; readiness (database, PostGIS,
 migrations) at <http://localhost:8000/api/v1/health/db>.
 
-**Documentation:** [System audit](docs/SYSTEM_AUDIT.md) ·
-[Supabase setup & backups](docs/SUPABASE_SETUP.md) ·
+**Documentation:** [Supabase setup & backups](docs/SUPABASE_SETUP.md) ·
 [Vercel deployment & retraining worker](docs/DEPLOYMENT_VERCEL.md) ·
 [ML training & evaluation](docs/ML_TRAINING_AND_EVALUATION.md) ·
 [Adviser demo checklist](docs/ADVISER_DEMO_CHECKLIST.md)
