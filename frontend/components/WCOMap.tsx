@@ -14,7 +14,7 @@ import {
   MapContainer, TileLayer, CircleMarker, ImageOverlay, Tooltip, useMap, useMapEvents,
 } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
-import { getToken } from "@/lib/api";
+import { API_BASE, getToken } from "@/lib/api";
 import ForecastChart from "@/components/ForecastChart";
 import type { ForecastPoint } from "@/lib/api";
 
@@ -107,7 +107,7 @@ const CAT_LABEL: Record<string, string> = {
 };
 
 const BATANGAS_CENTER: [number, number] = [13.7565, 121.0583];
-const BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000/api/v1";
+const BASE = API_BASE;
 
 // ── KDE Canvas Renderer ───────────────────────────────────────────────────────
 

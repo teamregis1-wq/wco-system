@@ -8,20 +8,23 @@
  * training, then stops. Shows nothing until there is something to report.
  */
 import { useEffect, useState } from "react";
-import { getToken } from "@/lib/api";
+import { API_BASE, getToken } from "@/lib/api";
 
-const BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000/api/v1";
+const BASE = API_BASE;
 
 interface Status {
   status: "idle" | "pending" | "training" | "completed" | "failed";
   model_version: string | null;
   error: string | null;
   pending_job: { change_count: number; last_change_at: string | null } | null;
-  auto_retraining?: { enabled: boolean; debounce_seconds: number };
+  auto_retraining?: { enabled: boolean; debounce_seconds: number; executor?: string;
+                      worker?: { online: boolean } | null };
 }
 
 const LOOK: Record<string, { bg: string; fg: string; text: (s: Status) => string }> = {
-  pending:   { bg: "#eff6ff", fg: "#1d4ed8", text: s => `Forecast model retraining scheduled (${s.pending_job?.change_count ?? 1} change${(s.pending_job?.change_count ?? 1) !== 1 ? "s" : ""} queued)…` },
+  pending:   { bg: "#eff6ff", fg: "#1d4ed8", text: s => `Forecast model retraining scheduled (${s.pending_job?.change_count ?? 1} change${(s.pending_job?.change_count ?? 1) !== 1 ? "s" : ""} queued)…`
+               + (s.auto_retraining?.executor === "worker" && !s.auto_retraining?.worker?.online
+                  ? " Waiting for the retraining worker to come online." : "") },
   training:  { bg: "#fffbeb", fg: "#92400e", text: () => "Retraining the forecast model on the updated data…" },
   completed: { bg: "#f0fdf4", fg: "#065f46", text: s => `Forecast model updated — ${s.model_version ?? "new version"} is active.` },
   failed:    { bg: "#fef2f2", fg: "#dc2626", text: s => `Retraining failed; previous model ${s.model_version ?? ""} kept. ${s.error ?? ""}` },

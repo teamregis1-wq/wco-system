@@ -7,9 +7,9 @@ import {
 } from "recharts";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import Navbar from "@/components/Navbar";
-import { getToken } from "@/lib/api";
+import { API_BASE, getToken } from "@/lib/api";
 
-const BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000/api/v1";
+const BASE = API_BASE;
 
 async function apiFetch<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {

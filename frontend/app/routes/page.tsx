@@ -4,13 +4,13 @@ import { useEffect, useState, useCallback } from "react";
 import dynamic from "next/dynamic";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import Navbar from "@/components/Navbar";
-import { getToken } from "@/lib/api";
+import { API_BASE, getToken } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 
 const LocationPicker = dynamic(() => import("@/components/LocationPicker"), { ssr: false });
 const RouteMap = dynamic(() => import("@/components/RouteMapView"), { ssr: false });
 
-const BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000/api/v1";
+const BASE = API_BASE;
 
 async function apiFetch<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {

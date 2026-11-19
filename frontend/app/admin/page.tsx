@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import Navbar from "@/components/Navbar";
 import PageShell, { card as cardStyle, primaryBtn as primaryBtnStyle, ghostBtn as ghostBtnStyle, input as inputStyle, label as labelStyle } from "@/components/PageShell";
-import { getToken } from "@/lib/api";
+import { API_BASE, getToken } from "@/lib/api";
 import { useAuth, type Role } from "@/lib/auth-context";
 import { toast, Toaster } from "@/components/Toast";
 import { downloadCSV } from "@/lib/csv";
@@ -40,7 +40,7 @@ interface Stats {
 
 // ── API ───────────────────────────────────────────────────────────────────────
 
-const BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000/api/v1";
+const BASE = API_BASE;
 
 async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
@@ -52,8 +52,11 @@ async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> 
     },
   });
   if (!res.ok) {
-    const msg = await res.text().catch(() => res.statusText);
-    throw new Error(msg);
+    const body = await res.json().catch(() => null);
+    const d = body?.detail;
+    throw new Error(typeof d === "string" ? d
+      : Array.isArray(d) ? d.map((e: { msg?: string }) => (e.msg ?? "").replace(/^Value error, /, "")).join("; ")
+      : `Request failed (${res.status})`);
   }
   if (res.status === 204) return undefined as T;
   return res.json();
@@ -204,7 +207,11 @@ interface TrainingStatus {
   pending_job: Job | null;
   last_finished_job: Job | null;
   recent_jobs: Job[];
-  auto_retraining: { enabled: boolean; debounce_seconds: number; mode: string; scheduler: string };
+  auto_retraining: {
+    enabled: boolean; debounce_seconds: number; mode: string; scheduler: string;
+    executor?: "inprocess" | "worker";
+    worker?: { worker_id: string; state: string; online: boolean; seconds_since_heartbeat: number; current_job_id: number | null } | null;
+  };
 }
 
 const fmtTime = (iso: string | null | undefined) =>
@@ -279,8 +286,8 @@ function LSTMTrainingPanel() {
   async function startTraining() {
     setStarting(true);
     try {
-      await apiFetch("/forecast/train", { method: "POST" });
-      toast("Retraining started.", "info");
+      const r = await apiFetch<{ status: string }>("/forecast/train", { method: "POST" });
+      toast(r?.status === "queued" ? "Retraining queued for the worker." : "Retraining started.", "info");
       await fetchStatus();
     } catch (e) { toast(String(e).replace("Error: ", ""), "error"); }
     finally { setStarting(false); }
@@ -317,6 +324,21 @@ function LSTMTrainingPanel() {
           {isBusy ? "Training…" : starting ? "Starting…" : "Retrain now"}
         </button>
       </div>
+
+      {/* Who executes training (in-process vs. separate worker) */}
+      {s?.auto_retraining?.executor === "worker" && (() => {
+        const w = s.auto_retraining.worker;
+        const online = !!w?.online;
+        return (
+          <div style={{ fontSize: 12, marginBottom: 10, padding: "8px 12px", borderRadius: 9,
+                        background: online ? "#f0fdf4" : "#fff7ed", border: `1px solid ${online ? "#bbf7d0" : "#fed7aa"}`,
+                        color: online ? "#065f46" : "#9a3412" }}>
+            <strong>Retraining worker: {online ? "online" : "offline"}</strong>
+            {w && <> · {w.state}{w.current_job_id ? ` job #${w.current_job_id}` : ""} · last heartbeat {Math.round(w.seconds_since_heartbeat)} s ago</>}
+            {!online && <div>Queued jobs are kept safely in the database and start as soon as a worker runs (<code>python -m scripts.retrain_worker</code>).</div>}
+          </div>
+        );
+      })()}
 
       {/* Status strip */}
       {s && st && (

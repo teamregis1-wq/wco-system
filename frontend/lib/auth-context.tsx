@@ -5,7 +5,7 @@ import {
   useCallback, type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
-import { getToken, clearToken, setToken } from "@/lib/api";
+import { API_BASE, getToken, clearToken, setToken } from "@/lib/api";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -43,7 +43,6 @@ const AuthContext = createContext<AuthCtx>({
   signIn: async () => {}, signOut: () => {}, can: () => false,
 });
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000/api/v1";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user,    setUser]    = useState<User | null>(null);

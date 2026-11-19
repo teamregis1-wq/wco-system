@@ -6,7 +6,7 @@ import ProtectedRoute from "@/components/ProtectedRoute";
 import { RoleGuard } from "@/components/ProtectedRoute";
 import Navbar from "@/components/Navbar";
 import PageShell, { card, primaryBtn, ghostBtn, input, label } from "@/components/PageShell";
-import { getToken } from "@/lib/api";
+import { API_BASE, getToken } from "@/lib/api";
 import ForecastChart from "@/components/ForecastChart";
 import type { ForecastPoint } from "@/lib/api";
 import { toast, Toaster } from "@/components/Toast";
@@ -133,7 +133,7 @@ const BARANGAYS = [
 
 // ── API ───────────────────────────────────────────────────────────────────────
 
-const BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000/api/v1";
+const BASE = API_BASE;
 
 async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
@@ -144,20 +144,38 @@ async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> 
       ...(options.headers ?? {}),
     },
   });
-  if (!res.ok) {
-    const msg = await res.text().catch(() => res.statusText);
-    throw new Error(msg);
-  }
+  if (!res.ok) throw new Error(await errorMessage(res));
   if (res.status === 204) return undefined as T;
   return res.json();
 }
 
+/** Human-readable message from a FastAPI error ({detail: string | validation errors[]}). */
+async function errorMessage(res: Response): Promise<string> {
+  const body = await res.json().catch(() => null);
+  const d = body?.detail;
+  if (typeof d === "string") return d;
+  if (Array.isArray(d) && d.length) {
+    return d.map((e: { loc?: (string | number)[]; msg?: string }) => {
+      const field = (e.loc ?? []).filter(p => p !== "body" && typeof p === "string").join(".");
+      const msg = (e.msg ?? "").replace(/^Value error, /, "");
+      return field ? `${field}: ${msg}` : msg;
+    }).join("; ");
+  }
+  return `Request failed (${res.status})`;
+}
+
 // ── Date-range helpers ────────────────────────────────────────────────────────
+
+/** Local-calendar YYYY-MM-DD (toISOString() would convert to UTC and, in UTC+8,
+ *  shift the date back a day). */
+function localISO(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 function addSixDays(startStr: string): string {
   const d = new Date(startStr + "T00:00:00");
   d.setDate(d.getDate() + 6);
-  return d.toISOString().split("T")[0];
+  return localISO(d);
 }
 
 function weekRangeLabel(startStr: string, endStr?: string | null): string {
@@ -426,9 +444,8 @@ function WCORecordsModal({
     if (!latestWeek) return null;
     const d = new Date(latestWeek + "T00:00:00");
     d.setDate(d.getDate() + 7);
-    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    const today = new Date().toISOString().slice(0, 10);
-    return iso <= today ? iso : null;
+    const iso = localISO(d);
+    return iso <= localISO(new Date()) ? iso : null;
   })();
   useEffect(() => {
     if (nextWeek && !weekDate) { setWeekDate(nextWeek); setWeekEndDate(addSixDays(nextWeek)); }

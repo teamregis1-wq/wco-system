@@ -5,6 +5,18 @@
  * so this module only owns the JWT and the types shared across components.
  */
 
+/**
+ * Base URL of the FastAPI backend, used by browser code only.
+ *
+ * - Deployed on Vercel (frontend and backend as Services on ONE domain):
+ *   same-origin "/api/v1" — the default when NEXT_PUBLIC_API_BASE is unset.
+ * - Local two-terminal development (next dev on :3000, uvicorn on :8000):
+ *   set NEXT_PUBLIC_API_BASE=http://localhost:8000/api/v1 in frontend/.env.local.
+ *
+ * NEXT_PUBLIC_ values are inlined at BUILD time; change them and rebuild/redeploy.
+ */
+export const API_BASE = (process.env.NEXT_PUBLIC_API_BASE || "/api/v1").replace(/\/+$/, "");
+
 const TOKEN_KEY = "wco_token";
 
 export function getToken(): string | null {
