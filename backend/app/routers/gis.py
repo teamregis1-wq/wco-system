@@ -7,13 +7,26 @@ Getis, A., & Ord, J. K. (1992). The Analysis of Spatial Association by Use of
 Silverman, B. W. (1986). Density Estimation for Statistics and Data Analysis.
   Chapman & Hall.
 
+Ord, J. K., & Getis, A. (1995). Local Spatial Autocorrelation Statistics:
+  Distributional Issues and an Application. Geographical Analysis, 27(4), 286–306.
+Benjamini, Y., & Hochberg, Y. (1995). Controlling the False Discovery Rate.
+  JRSS B, 57(1), 289–300.
+
 Implementation notes
 --------------------
-Spatial weight matrix  : binary contiguity, fixed-distance band of 0.015° ≈ 1.5 km.
-Gi* formula            : standard Getis-Ord with row-standardised weights.
-KDE                    : scipy.stats.gaussian_kde, volume-weighted, Scott's rule
-                         applied in metre-projected coordinates to avoid
-                         degree-unit artefacts.
+Input variable x_i     : mean weekly WCO (liters/week) of each ACTIVE establishment.
+Spatial weights        : binary fixed-distance band (default 1,500 m) measured on a
+                         local equirectangular projection (metres), INCLUDING the
+                         location itself (w_ii = 1) — that inclusion is what makes
+                         the statistic Gi* rather than Gi.
+Gi* formula            : Ord & Getis (1995) z-score form with binary weights
+                         (not row-standardised).
+p-values               : two-sided, normal approximation; also reported with a
+                         Benjamini–Hochberg FDR adjustment because ~n tests are run
+                         at once. Categories use the unadjusted z for continuity.
+KDE                    : scipy.stats.gaussian_kde in projected metres, weighted by
+                         mean weekly WCO, Scott's rule. Output is RELATIVE density
+                         (normalised to [0, 1]), not liters per km².
 Grid orientation       : row 0 = lat_max (northernmost) so it matches image-overlay
                          convention (top-left = northwest).
 """
@@ -38,12 +51,12 @@ router = APIRouter(prefix="/gis", tags=["gis"])
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
-# At ~14°N: 1° lat ≈ 111 km, 1° lng ≈ 107 km
-_M_PER_DEG_LAT = 111_000.0
-_M_PER_DEG_LNG = 107_000.0
+# Local equirectangular projection: metres per degree at the study latitude.
+_M_PER_DEG_LAT = 110_574.0
+_M_PER_DEG_LNG_EQUATOR = 111_320.0
 
-# Spatial-weight bandwidth: ~1.5 km expressed in degrees.
-_WEIGHT_BAND_DEG = 0.015
+# Spatial-weight distance band in metres.
+_WEIGHT_BAND_M = 1_500.0
 
 # Gi* significance thresholds (two-tailed z-scores).
 _Z_HIGH = 2.576   # p < 0.01
@@ -52,17 +65,44 @@ _Z_MED  = 1.960   # p < 0.05
 
 # ── Spatial statistics helpers ─────────────────────────────────────────────────
 
-def _weight_matrix(lats: np.ndarray, lons: np.ndarray, band: float) -> np.ndarray:
-    """Binary spatial-weight matrix: 1 if Euclidean distance ≤ band, 0 otherwise.
+def _project_m(lats: np.ndarray, lons: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Project lat/lng to local metres (equirectangular about the mean latitude).
 
-    Uses a uniform projection in degrees — valid for the small study area
-    (~8 km × 8 km) of Batangas City.
+    Distortion is negligible over a city-sized study area (< 0.1 % at ~10 km).
     """
-    coords = np.column_stack([lats, lons])
+    lat0 = float(np.mean(lats)) if len(lats) else 13.76
+    x = lons * _M_PER_DEG_LNG_EQUATOR * np.cos(np.radians(lat0))
+    y = lats * _M_PER_DEG_LAT
+    return x, y
+
+
+def _weight_matrix(lats: np.ndarray, lons: np.ndarray, band_m: float) -> np.ndarray:
+    """Binary Gi* weights: 1 if distance ≤ band_m (metres), INCLUDING i itself."""
+    x, y = _project_m(lats, lons)
+    coords = np.column_stack([x, y])
     D = scipy_dist(coords, coords)
-    W = (D <= band).astype(float)
-    np.fill_diagonal(W, 0.0)   # exclude self-neighbour
+    W = (D <= band_m).astype(float)
+    np.fill_diagonal(W, 1.0)   # Gi* includes the focal location (w_ii = 1)
     return W
+
+
+def _bh_fdr(p: np.ndarray) -> np.ndarray:
+    """Benjamini–Hochberg adjusted p-values (monotone, capped at 1)."""
+    p = np.asarray(p, dtype=float)
+    n = p.size
+    if n == 0:
+        return p
+    order = np.argsort(p)
+    ranked = p[order] * n / np.arange(1, n + 1)
+    adj = np.minimum.accumulate(ranked[::-1])[::-1]
+    out = np.empty(n)
+    out[order] = np.clip(adj, 0.0, 1.0)
+    return out
+
+
+def _resolve_band_m(band: float | None, band_m: float) -> float:
+    # `band` (degrees) is the legacy query parameter; convert if supplied.
+    return float(band) * _M_PER_DEG_LAT if band is not None else float(band_m)
 
 
 def _getis_ord_gi_star(values: np.ndarray, W: np.ndarray) -> np.ndarray:
@@ -72,7 +112,8 @@ def _getis_ord_gi_star(values: np.ndarray, W: np.ndarray) -> np.ndarray:
           ─────────────────────────────────────────────────────────
           s √( (n Σ_j w_ij²  −  (Σ_j w_ij)²) / (n − 1) )
 
-    where s = population standard deviation of x.
+    where s = population standard deviation of x and all sums run over
+    j = 1..n INCLUDING j = i (W must have w_ii = 1 for Gi*).
 
     Returns
     -------
@@ -95,7 +136,7 @@ def _getis_ord_gi_star(values: np.ndarray, W: np.ndarray) -> np.ndarray:
     inner      = (n * sum_w2 - sum_w ** 2) / max(n - 1, 1)
     denominator = s * np.sqrt(np.clip(inner, 0.0, None))
 
-    return np.where(denominator > 0.0, numerator / denominator, 0.0)
+    return np.divide(numerator, denominator, out=np.zeros(n), where=denominator > 0.0)
 
 
 def _categorize(z: float) -> str:
@@ -117,45 +158,39 @@ def _kde_grid(
     lng_min: float,
     lng_max: float,
     steps: int = 60,
-) -> np.ndarray:
+) -> tuple[np.ndarray, float]:
     """Volume-weighted Gaussian KDE evaluated on a regular grid.
 
-    Coordinates are converted to metres before KDE fitting so that
-    Scott's bandwidth rule operates in meaningful units.
+    Coordinates are projected to metres before fitting so that Scott's
+    bandwidth rule operates in meaningful units.
 
     Returns
     -------
-    ndarray shape (steps, steps):
-        row 0 = lat_max (north), row N = lat_min (south)
-        col 0 = lng_min (west),  col M = lng_max (east)
+    (grid, bandwidth_m)
+        grid shape (steps, steps): row 0 = lat_max (north), col 0 = lng_min (west)
+        bandwidth_m: mean kernel standard deviation actually used (metres)
     """
-    if len(lats) < 3:
-        return np.zeros((steps, steps))
+    empty = (np.zeros((steps, steps)), 0.0)
+    w = np.asarray(weights, dtype=float)
+    if len(lats) < 3 or not np.all(np.isfinite(w)) or w.sum() <= 0:
+        return empty
 
-    # Project to metres for bandwidth calculation.
-    x_m = lons * _M_PER_DEG_LNG
-    y_m = lats * _M_PER_DEG_LAT
+    lat0 = float(np.mean(lats))
+    kx = _M_PER_DEG_LNG_EQUATOR * np.cos(np.radians(lat0))
+    x_m, y_m = lons * kx, lats * _M_PER_DEG_LAT
 
-    w_norm = weights / weights.sum()
+    try:
+        kde = sp_stats.gaussian_kde(np.vstack([x_m, y_m]), weights=w / w.sum())
+    except (np.linalg.LinAlgError, ValueError):
+        # e.g. all points collinear/identical → singular covariance
+        return empty
 
-    kde = sp_stats.gaussian_kde(
-        np.vstack([x_m, y_m]),
-        weights=w_norm,
-        # bw_method="scott"  — default, left implicit
-    )
-
-    # Build grid: north→south rows, west→east cols.
     lat_vals = np.linspace(lat_max, lat_min, steps)   # row 0 = north
     lng_vals = np.linspace(lng_min, lng_max, steps)
-
-    lng_mesh, lat_mesh = np.meshgrid(
-        lng_vals * _M_PER_DEG_LNG,
-        lat_vals * _M_PER_DEG_LAT,
-    )
-    pts = np.vstack([lng_mesh.ravel(), lat_mesh.ravel()])
-    z = kde(pts).reshape(steps, steps)
-
-    return z
+    lng_mesh, lat_mesh = np.meshgrid(lng_vals * kx, lat_vals * _M_PER_DEG_LAT)
+    z = kde(np.vstack([lng_mesh.ravel(), lat_mesh.ravel()])).reshape(steps, steps)
+    bandwidth_m = float(np.mean(np.sqrt(np.diag(kde.covariance))))
+    return z, bandwidth_m
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
@@ -190,26 +225,32 @@ def gis_establishments(
 
 @router.get("/hotspots")
 def gis_hotspots(
-    band: float = Query(_WEIGHT_BAND_DEG, description="Spatial-weight bandwidth in degrees"),
+    band_m: float = Query(_WEIGHT_BAND_M, gt=0, le=20_000,
+                          description="Spatial-weight distance band in metres"),
+    band: float | None = Query(None, gt=0, le=0.2, deprecated=True,
+                               description="Legacy: distance band in degrees (overrides band_m)"),
     refresh: bool = Query(False, description="Bypass the server cache"),
     db: Session = Depends(get_db),
     _: str = Depends(get_current_user),
 ):
     """Getis-Ord Gi* hotspot scores per establishment.
 
-    Each establishment is scored by the spatial autocorrelation of its
-    average weekly WCO volume relative to its neighbours within *band*
-    degrees (default ≈ 1.5 km).
+    Each active establishment is scored by Gi*: the sum of mean weekly WCO
+    within *band_m* metres (itself included) compared with what would be
+    expected if volumes were spatially random.
 
     Response fields
     ---------------
-    gi_star_z   : Gi* z-score  (unbounded; > 1.96 → significant hotspot)
+    gi_star_z   : Gi* z-score  (≥ 1.96 → hot spot at p < 0.05, unadjusted)
     p_value     : two-tailed p approximated from the standard normal CDF
-    category    : "high" | "medium" | "low" | "coldspot"
+    p_value_fdr : Benjamini–Hochberg adjusted p-value (multiple-testing aware)
+    category    : "high" (p<0.01 hot) | "medium" (p<0.05 hot) |
+                  "low" (not significant) | "coldspot" (p<0.05 cold)
     avg_liters  : mean weekly WCO generation (the input variable x_i)
     neighbor_count : number of establishments within the weight band
     """
-    if not refresh and (cached := cache_get(f"gis:hotspots:{band}")) is not None:
+    band_m = _resolve_band_m(band, band_m)
+    if not refresh and (cached := cache_get(f"gis:hotspots:{band_m}")) is not None:
         return cached
     avg_subq = (
         select(
@@ -232,6 +273,7 @@ def gis_hotspots(
             avg_subq.c.avg_liters,
             avg_subq.c.record_count,
         ).join(avg_subq, Establishment.id == avg_subq.c.establishment_id)
+        .where(Establishment.is_active.is_(True))
     ).all()
 
     if not rows:
@@ -241,14 +283,16 @@ def gis_hotspots(
     lons    = np.array([r.longitude  for r in rows])
     volumes = np.array([r.avg_liters for r in rows])
 
-    W      = _weight_matrix(lats, lons, band)
+    W      = _weight_matrix(lats, lons, band_m)
     z_arr  = _getis_ord_gi_star(volumes, W)
 
     # Two-tailed p-value from standard normal.
     from scipy.special import ndtr  # CDF of N(0,1)
     p_arr = 2.0 * (1.0 - ndtr(np.abs(z_arr)))
+    p_fdr = _bh_fdr(p_arr)
 
-    neighbor_counts = W.sum(axis=1).astype(int)
+    # Neighbours within the band, excluding the establishment itself.
+    neighbor_counts = (W.sum(axis=1) - 1).astype(int)
 
     out = []
     for i, r in enumerate(rows):
@@ -263,13 +307,15 @@ def gis_hotspots(
                 "type": r.type,
                 "gi_star_z": round(z, 4),
                 "p_value": round(float(p_arr[i]), 4),
+                "p_value_fdr": round(float(p_fdr[i]), 4),
+                "significant_fdr": bool(p_fdr[i] < 0.05),
                 "category": _categorize(z),
                 "avg_liters": round(float(r.avg_liters), 2),
                 "record_count": int(r.record_count),
                 "neighbor_count": int(neighbor_counts[i]),
             }
         )
-    cache_set(f"gis:hotspots:{band}", out)
+    cache_set(f"gis:hotspots:{band_m}", out)
     return out
 
 
@@ -290,7 +336,8 @@ def gis_kde(
     lat_min/max : bounding box latitudes (add a 10% margin around data).
     lng_min/max : bounding box longitudes.
     top_hotspots: top-10 establishments by Gi* z-score (convenient for sidebar).
-    bandwidth_m : Scott's bandwidth (metres) used for the kernel.
+    bandwidth_m : mean kernel standard deviation (metres) actually used
+                  (Scott's rule with the effective sample size of the weights).
     """
     if not refresh and (cached := cache_get(f"gis:kde:{steps}")) is not None:
         return cached
@@ -313,6 +360,7 @@ def gis_kde(
             Establishment.type,
             avg_subq.c.avg_liters,
         ).join(avg_subq, Establishment.id == avg_subq.c.establishment_id)
+        .where(Establishment.is_active.is_(True))
     ).all()
 
     if not rows:
@@ -334,20 +382,15 @@ def gis_kde(
     lng_min = float(lons.min() - margin_lng)
     lng_max = float(lons.max() + margin_lng)
 
-    raw_grid = _kde_grid(lats, lons, volumes, lat_min, lat_max, lng_min, lng_max, steps)
+    raw_grid, bandwidth_m = _kde_grid(
+        lats, lons, volumes, lat_min, lat_max, lng_min, lng_max, steps)
 
-    # Normalise to [0, 1].
+    # Normalise to [0, 1] — relative density, not liters per km².
     vmax = raw_grid.max()
     norm_grid = (raw_grid / vmax).tolist() if vmax > 0 else raw_grid.tolist()
 
-    # Estimate bandwidth from Scott's rule in metres.
-    n = len(lats)
-    bw_x = n ** (-1.0 / 6.0) * np.std(lons * _M_PER_DEG_LNG)
-    bw_y = n ** (-1.0 / 6.0) * np.std(lats * _M_PER_DEG_LAT)
-    bandwidth_m = float((bw_x + bw_y) / 2.0)
-
     # Top-10 by Gi* z-score (recompute quickly).
-    W     = _weight_matrix(lats, lons, _WEIGHT_BAND_DEG)
+    W     = _weight_matrix(lats, lons, _WEIGHT_BAND_M)
     z_arr = _getis_ord_gi_star(volumes, W)
     top10_idx = np.argsort(z_arr)[::-1][:10]
     top_hotspots = [
@@ -373,6 +416,7 @@ def gis_kde(
         "steps": steps,
         "top_hotspots": top_hotspots,
         "bandwidth_m": round(bandwidth_m, 1),
+        "density_units": "relative (0–1), volume-weighted",
     }
     cache_set(f"gis:kde:{steps}", result)
     return result
@@ -407,6 +451,7 @@ def gis_summary(
             Establishment.longitude,
             avg_subq.c.avg_liters,
         ).join(avg_subq, Establishment.id == avg_subq.c.establishment_id)
+        .where(Establishment.is_active.is_(True))
     ).all()
 
     if not rows:
@@ -416,7 +461,7 @@ def gis_summary(
     lons    = np.array([r.longitude  for r in rows])
     volumes = np.array([r.avg_liters for r in rows])
 
-    W     = _weight_matrix(lats, lons, _WEIGHT_BAND_DEG)
+    W     = _weight_matrix(lats, lons, _WEIGHT_BAND_M)
     z_arr = _getis_ord_gi_star(volumes, W)
 
     cats = [_categorize(float(z)) for z in z_arr]

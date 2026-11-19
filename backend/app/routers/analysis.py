@@ -1,9 +1,15 @@
-"""Collection route optimisation using OSRM road-network routing.
+"""Collection route planning using OSRM road-network distances.
 
-Algorithm: greedy nearest-neighbour TSP on road distances from OSRM.
-Road geometry is fetched from the public OSRM API and returned alongside
-the stop order so the frontend can draw the actual road path.
-Falls back to haversine straight-line distances if OSRM is unreachable.
+Algorithm: nearest-neighbour construction heuristic for the travelling-salesman
+tour (start and end at the depot). It is fast and usually reasonable, but it is
+a HEURISTIC — the resulting tour is NOT guaranteed to be the shortest possible.
+
+Distances come from the OSRM table service (road network). If OSRM is
+unreachable the whole route falls back to haversine (straight-line) distances;
+if OSRM reports an individual pair as unroutable, that leg alone uses the
+haversine estimate and the response says so (``distance_basis`` = "mixed").
+Durations assume a constant average speed (ROUTE_AVG_SPEED_KMH, default
+30 km/h) and exclude time spent at each stop.
 """
 import json
 import math
@@ -14,8 +20,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_role
 from app.models.analysis import SavedRoute
 from app.models.establishment import Establishment
 from app.models.wco import WCOGenerationRecord
@@ -27,7 +34,8 @@ from app.schemas.schemas import (
 
 router = APIRouter(tags=["analysis"])
 
-OSRM_BASE = "https://router.project-osrm.org"
+OSRM_BASE = settings.osrm_base_url.rstrip("/")
+OSRM_TIMEOUT = settings.osrm_timeout_seconds
 
 
 # ── Haversine fallback ────────────────────────────────────────────────────────
@@ -44,7 +52,7 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 # ── OSRM helpers ─────────────────────────────────────────────────────────────
 
-def _osrm_table(points: list[tuple[float, float]], timeout: int = 12) -> list[list[float]] | None:
+def _osrm_table(points: list[tuple[float, float]], timeout: float = OSRM_TIMEOUT) -> list[list[float | None]] | None:
     """Return NxN road-distance matrix in metres. points = [(lat, lng), ...]"""
     coords = ";".join(f"{lng},{lat}" for lat, lng in points)
     url = f"{OSRM_BASE}/table/v1/driving/{coords}?annotations=distance"
@@ -58,7 +66,7 @@ def _osrm_table(points: list[tuple[float, float]], timeout: int = 12) -> list[li
         return None
 
 
-def _osrm_route(points: list[tuple[float, float]], timeout: int = 12) -> tuple[list[list[float]] | None, float | None]:
+def _osrm_route(points: list[tuple[float, float]], timeout: float = OSRM_TIMEOUT) -> tuple[list[list[float]] | None, float | None]:
     """Return (geometry [[lat,lng],...], total_distance_m) for ordered waypoints."""
     coords = ";".join(f"{lng},{lat}" for lat, lng in points)
     url = f"{OSRM_BASE}/route/v1/driving/{coords}?overview=full&geometries=geojson&steps=false"
@@ -89,14 +97,24 @@ def _nn_tsp(depot: tuple[float, float], nodes: list[dict]) -> list[dict]:
     return route
 
 
-def _nn_tsp_road(dist_matrix: list[list[float]], n_nodes: int) -> list[int]:
-    """Greedy NN-TSP on road-distance matrix. Depot is index 0, nodes are 1..n."""
+def _nn_tsp_road(dist_matrix: list[list[float | None]], n_nodes: int,
+                 fallback_km) -> list[int]:
+    """Greedy NN-TSP on a road-distance matrix. Depot is index 0, nodes are 1..n.
+
+    Unroutable pairs (OSRM returns null) are compared using the haversine
+    fallback instead of being treated as zero or infinite.
+    """
     unvisited = set(range(1, n_nodes + 1))
     order: list[int] = []
     cur = 0
     while unvisited:
         row = dist_matrix[cur]
-        best = min(unvisited, key=lambda j: row[j] if row[j] is not None else 1e18)
+
+        def cost(j: int) -> float:
+            v = row[j] if j < len(row) else None
+            return v if v is not None else fallback_km(cur, j) * 1000.0
+
+        best = min(unvisited, key=lambda j: (cost(j), j))
         order.append(best)
         unvisited.remove(best)
         cur = best
@@ -111,9 +129,10 @@ def compute_collection_route(
     db: Session = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    """Compute an optimised WCO collection route using OSRM road distances.
+    """Plan a WCO collection tour with the nearest-neighbour heuristic.
 
-    Falls back to haversine (straight-line) if OSRM is unreachable.
+    Uses OSRM road distances; falls back to haversine (straight-line) if OSRM
+    is unreachable. The tour is NOT guaranteed optimal.
     Returns ordered stops with per-leg distances and the full road geometry.
     """
     t0 = time.perf_counter()
@@ -121,18 +140,26 @@ def compute_collection_route(
         raise HTTPException(status_code=400, detail="No establishment IDs provided.")
 
     estabs = db.scalars(
-        select(Establishment).where(Establishment.id.in_(payload.establishment_ids))
+        select(Establishment).where(Establishment.id.in_(payload.establishment_ids),
+                                    Establishment.is_active.is_(True))
+        .order_by(Establishment.id)
     ).all()
     if not estabs:
-        raise HTTPException(status_code=404, detail="None of the supplied IDs were found.")
+        raise HTTPException(status_code=404, detail="None of the supplied IDs were found (or all are inactive).")
 
-    avg_map: dict[int, float] = {}
-    for e in estabs:
-        avg = db.scalar(
-            select(func.avg(WCOGenerationRecord.quantity_liters))
-            .where(WCOGenerationRecord.establishment_id == e.id)
-        ) or 0.0
-        avg_map[e.id] = round(float(avg), 1)
+    warnings: list[str] = []
+    missing = set(payload.establishment_ids) - {e.id for e in estabs}
+    if missing:
+        warnings.append(f"{len(missing)} selected establishment(s) were not found or are inactive and were left out.")
+
+    avg_rows = db.execute(
+        select(WCOGenerationRecord.establishment_id, func.avg(WCOGenerationRecord.quantity_liters))
+        .where(WCOGenerationRecord.establishment_id.in_([e.id for e in estabs]))
+        .group_by(WCOGenerationRecord.establishment_id)
+    ).all()
+    avg_map: dict[int, float] = {e.id: 0.0 for e in estabs}
+    for eid, avg in avg_rows:
+        avg_map[eid] = round(float(avg or 0.0), 1)
 
     nodes = [
         {"id": e.id, "name": e.name, "wco_code": e.wco_code, "barangay": e.barangay,
@@ -147,24 +174,37 @@ def compute_collection_route(
     dist_matrix = _osrm_table(all_points)
     used_osrm = dist_matrix is not None
 
+    def straight_km(i: int, j: int) -> float:
+        (a_lat, a_lng), (b_lat, b_lng) = all_points[i], all_points[j]
+        return _haversine_km(a_lat, a_lng, b_lat, b_lng)
+
+    def leg_km(i: int, j: int) -> tuple[float, str]:
+        """Road distance if OSRM routed this pair, else a straight-line estimate."""
+        if used_osrm:
+            v = dist_matrix[i][j]
+            if v is not None:
+                return v / 1000.0, "road"
+        return straight_km(i, j), "straight_line"
+
     if used_osrm:
-        order_indices = _nn_tsp_road(dist_matrix, len(nodes))
-        ordered = [nodes[i - 1] for i in order_indices]   # i is 1-based
+        order_indices = _nn_tsp_road(dist_matrix, len(nodes), straight_km)
     else:
-        ordered = _nn_tsp(depot, nodes)
+        # Same heuristic on straight-line distances.
+        visit = _nn_tsp(depot, nodes)
+        index_of = {n["id"]: k + 1 for k, n in enumerate(nodes)}
+        order_indices = [index_of[n["id"]] for n in visit]
+    ordered = [nodes[i - 1] for i in order_indices]   # i is 1-based
 
     # --- Build stops with per-leg distances ----------------------------------
     stops: list[RouteStop] = []
-    prev_lat, prev_lng = depot
+    bases: set[str] = set()
     cum = 0.0
     for i, node in enumerate(ordered, 1):
-        if used_osrm:
-            prev_idx = 0 if i == 1 else order_indices[i - 2]
-            cur_idx  = order_indices[i - 1]
-            leg_m    = (dist_matrix[prev_idx][cur_idx] or 0.0)
-            leg      = round(leg_m / 1000, 2)
-        else:
-            leg = round(_haversine_km(prev_lat, prev_lng, node["lat"], node["lng"]), 2)
+        prev_idx = 0 if i == 1 else order_indices[i - 2]
+        cur_idx  = order_indices[i - 1]
+        leg_raw, basis = leg_km(prev_idx, cur_idx)
+        bases.add(basis)
+        leg = round(leg_raw, 2)
         cum += leg
         stops.append(RouteStop(
             stop_number=i,
@@ -177,28 +217,35 @@ def compute_collection_route(
             lng=node["lng"],
             leg_distance_km=leg,
             cumulative_distance_km=round(cum, 2),
+            leg_distance_basis=basis,
         ))
-        prev_lat, prev_lng = node["lat"], node["lng"]
 
     # Return leg
-    if used_osrm:
-        last_idx = order_indices[-1]
-        return_m = (dist_matrix[last_idx][0] or 0.0)
-        return_leg = round(return_m / 1000, 2)
-    else:
-        return_leg = round(_haversine_km(prev_lat, prev_lng, depot[0], depot[1]), 2)
+    return_raw, basis = leg_km(order_indices[-1], 0)
+    bases.add(basis)
+    return_leg = round(return_raw, 2)
 
     total_dist  = round(cum + return_leg, 2)
     total_wco   = round(sum(n["avg_liters"] for n in ordered), 1)
 
+    distance_basis = "mixed" if len(bases) > 1 else bases.pop()
+    if not used_osrm:
+        warnings.append("OSRM road routing was unavailable; distances are straight-line "
+                        "(haversine) estimates and understate road distance.")
+    elif distance_basis == "mixed":
+        warnings.append("OSRM could not route some legs; those legs use straight-line "
+                        "estimates (see leg_distance_basis on each stop).")
+
     # --- Road geometry via OSRM route API ------------------------------------
     road_points = [depot] + [(n["lat"], n["lng"]) for n in ordered] + [depot]
     geometry, _ = _osrm_route(road_points) if used_osrm else (None, None)
+    if used_osrm and geometry is None:
+        warnings.append("Road geometry could not be retrieved; the map shows straight segments.")
 
     algorithm = (
-        "Greedy NN-TSP · OSRM road distances (Batangas City road network)"
+        "Nearest-neighbour heuristic (not guaranteed optimal) · OSRM road distances"
         if used_osrm
-        else "Greedy NN-TSP · Haversine fallback (OSRM unavailable)"
+        else "Nearest-neighbour heuristic (not guaranteed optimal) · straight-line fallback"
     )
 
     return CollectionRouteResponseV2(
@@ -208,11 +255,14 @@ def compute_collection_route(
         stops=stops,
         total_distance_km=total_dist,
         total_establishments=len(stops),
-        estimated_duration_min=round((total_dist / 30.0) * 60, 0),
+        estimated_duration_min=round((total_dist / settings.route_avg_speed_kmh) * 60, 0),
         total_wco_liters=total_wco,
         algorithm=algorithm,
         computation_time_ms=round((time.perf_counter() - t0) * 1000, 1),
         geometry=geometry,
+        distance_basis=distance_basis,
+        is_heuristic=True,
+        warnings=warnings,
     )
 
 
@@ -224,22 +274,30 @@ def compute_point_to_point(
     db: Session = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    """Point-to-point road distance between two establishments via OSRM."""
+    """Point-to-point road distance between two establishments via OSRM.
+
+    The ``algorithm`` query parameter is accepted for backward compatibility
+    but ignored: the path is whatever OSRM's own shortest-path routing returns
+    (or a straight line if OSRM is unavailable). The response reports which.
+    """
     source = db.get(Establishment, source_id)
     target = db.get(Establishment, target_id)
     if not source or not target:
         raise HTTPException(status_code=404, detail="Establishment not found.")
     points = [(source.latitude, source.longitude), (target.latitude, target.longitude)]
     geom, dist_m = _osrm_route(points)
+    basis = "road"
     if dist_m is None:
         dist_km = _haversine_km(source.latitude, source.longitude, target.latitude, target.longitude)
         dist_m  = dist_km * 1000
+        basis = "straight_line"
     return {
         "source_id": source_id,
         "target_id": target_id,
-        "algorithm": algorithm,
+        "algorithm": "osrm_route" if basis == "road" else "haversine_straight_line",
+        "distance_basis": basis,
         "total_distance_m": round(dist_m, 1),
-        "estimated_travel_min": round(dist_m / 1000 / 30 * 60, 1),
+        "estimated_travel_min": round(dist_m / 1000 / settings.route_avg_speed_kmh * 60, 1),
         "geometry": geom,
     }
 
@@ -259,7 +317,7 @@ def list_saved_routes(
 def save_route(
     payload: SavedRouteCreate,
     db: Session = Depends(get_db),
-    _=Depends(get_current_user),
+    _=Depends(require_role("admin", "researcher")),
 ):
     route = SavedRoute(**payload.model_dump())
     db.add(route)
@@ -272,7 +330,7 @@ def save_route(
 def delete_saved_route(
     route_id: int,
     db: Session = Depends(get_db),
-    _=Depends(get_current_user),
+    _=Depends(require_role("admin", "researcher")),
 ):
     route = db.get(SavedRoute, route_id)
     if not route:
