@@ -60,7 +60,7 @@ def main(argv=None) -> int:
     try:
         import torch  # noqa: F401
     except ImportError:
-        logger.error("PyTorch is not installed. Install requirements-worker.txt for the worker.")
+        logger.error("PyTorch is not installed. Install requirements.txt (it includes CPU PyTorch).")
         return 2
 
     worker_id = f"{socket.gethostname()}:{os.getpid()}"

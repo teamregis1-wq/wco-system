@@ -1,7 +1,11 @@
-# API runtime — what the FastAPI service needs (this is what Vercel installs).
-# Deliberately excludes PyTorch: inference is a NumPy forward pass and training
-# runs in the retraining worker (requirements-worker.txt). Keeps the serverless
-# bundle well under Vercel's 500 MB Python limit.
+# Backend runtime — what Railway (or any server / container) installs.
+#
+# Includes CPU-only PyTorch so automatic retraining runs inside the API process
+# (RETRAIN_EXECUTOR defaults to "inprocess" off Vercel). Forecast inference is a
+# NumPy forward pass and never imports torch. On Linux the CPU wheel comes from
+# the PyTorch index (the default Linux wheel pulls ~2 GB of CUDA libraries).
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 fastapi==0.110.0
 uvicorn[standard]==0.27.1
 sqlalchemy==2.0.27
@@ -18,3 +22,5 @@ python-multipart==0.0.9
 email-validator==2.1.0
 numpy==1.26.4
 scipy==1.12.0
+torch==2.2.0+cpu ; sys_platform == "linux"
+torch==2.2.0 ; sys_platform != "linux"

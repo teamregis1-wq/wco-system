@@ -22,7 +22,7 @@ npm run dev
 ```
 
 Local two-terminal development needs `NEXT_PUBLIC_API_BASE=http://localhost:8000/api/v1` in
-`frontend/.env.local` (copy `.env.local.example`). On Vercel, leave it unset (same-origin `/api/v1`).
+`frontend/.env.local` (copy `.env.local.example`). Production settings: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 Then open <http://localhost:3000> and sign in with an account created by
 `python -m scripts.create_admin` (see below). No credentials are published in this repository.
@@ -31,7 +31,7 @@ API documentation is served at <http://localhost:8000/api/docs>; readiness (data
 migrations) at <http://localhost:8000/api/v1/health/db>.
 
 **Documentation:** [Supabase setup & backups](docs/SUPABASE_SETUP.md) ·
-[Vercel deployment & retraining worker](docs/DEPLOYMENT_VERCEL.md) ·
+[Deployment (Vercel + Railway)](docs/DEPLOYMENT.md) ·
 [ML training & evaluation](docs/ML_TRAINING_AND_EVALUATION.md) ·
 [Adviser demo checklist](docs/ADVISER_DEMO_CHECKLIST.md)
 
@@ -41,7 +41,7 @@ migrations) at <http://localhost:8000/api/v1/health/db>.
 
 ```
 wco-system/
-├── backend/                     FastAPI · SQLAlchemy · PostGIS
+├── backend/                     FastAPI · SQLAlchemy · PostGIS — deployed on Railway
 │   ├── app/                       application code only
 │   │   ├── core/                  config, database engine, security, cache, audit
 │   │   ├── models/                SQLAlchemy tables
@@ -52,23 +52,37 @@ wco-system/
 │   │   │   └── model_artifacts/   bundled pre-audit model + local cache of trained versions
 │   │   └── main.py                app entry point, middleware, router registration
 │   ├── alembic/versions/          database migrations, applied in order
-│   ├── data/                      demo establishment catalog, archived export CSV
+│   ├── data/
+│   │   ├── demo_establishment_catalog.csv   120 demo locations used by load_demo_data
+│   │   ├── archive/               archived synthetic export used in the ML write-up
+│   │   ├── legacy/                hand-compiled list kept for provenance only (not loaded)
+│   │   └── exports/               your CSV exports (gitignored)
 │   ├── scripts/                   operational scripts (check_db, load_demo_data, create_admin, …)
+│   │   └── legacy/                old data-WIPING seeders, guarded; not part of normal use
 │   ├── tests/                     pytest suite (SQLite; PostGIS tests opt-in)
-│   └── requirements.txt
+│   ├── requirements.txt           runtime incl. CPU PyTorch (what Railway installs)
+│   ├── requirements-dev.txt       + test tools
+│   ├── Procfile · runtime.txt     Railway start command and Python version
+│   └── worker.Dockerfile          optional stand-alone retraining worker
 │
-├── frontend/                    Next.js 14 (App Router) · TypeScript · Leaflet
+├── frontend/                    Next.js 14 (App Router) · TypeScript · Leaflet — deployed on Vercel
 │   ├── app/                       one folder per page/route
 │   │   ├── page.tsx               landing page (public)
 │   │   ├── map/                   hotspot map + KDE heatmap
 │   │   ├── dashboard/             city-wide analytics
 │   │   ├── establishments/        registry, WCO records, CSV import/export
 │   │   ├── routes/                collection route planner
-│   │   └── admin/                 user management, audit log
-│   ├── components/                shared UI (map, charts, navbar, auth popover)
-│   └── lib/                       auth context, CSV parsing/validation, fonts
+│   │   └── admin/                 user management, model status, audit log
+│   ├── components/
+│   │   ├── layout/                Navbar, PageShell, Logo, Toast
+│   │   ├── auth/                  ProtectedRoute, sign-in popover
+│   │   ├── landing/               animated background, mini-map card
+│   │   ├── maps/                  hotspot map, route map, location picker
+│   │   └── forecast/              forecast chart, retraining status badge
+│   ├── lib/                       API base + auth, CSV parsing/validation, theme, fonts
+│   └── next.config.mjs            redirects + optional /api proxy to the backend
 │
-├── docs/                        audit, Supabase, ML, demo checklist
+├── docs/                        deployment, Supabase, ML method & results, demo checklist
 └── notebooks/                   LSTM training exploration (mirrors the backend method)
 ```
 
@@ -84,7 +98,7 @@ wco-system/
 | Automatic retraining | `backend/app/services/retraining.py` |
 | Route optimisation | `backend/app/routers/analysis.py` |
 | A page's UI | `frontend/app/<page>/page.tsx` |
-| The map | `frontend/components/WCOMap.tsx` |
+| The map | `frontend/components/maps/WCOMap.tsx` |
 | CSV import rules | `frontend/lib/csv.ts` |
 
 ---
@@ -95,9 +109,8 @@ wco-system/
 
 ```bash
 cd backend
-python3.11 -m venv venv                        # 3.11 or 3.12 (Vercel runs 3.12)
-./venv/bin/pip install -r requirements-dev.txt  # API + PyTorch (training worker) + tests
-# requirements.txt = API only (what Vercel installs); requirements-worker.txt = + PyTorch
+python3.11 -m venv venv                        # 3.11 (Railway) or 3.12
+./venv/bin/pip install -r requirements-dev.txt  # runtime (incl. PyTorch) + test tools
 ```
 
 Create `backend/.env` from the template (never committed):
@@ -142,7 +155,7 @@ approximate placements near public landmarks, not surveyed locations. Assumption
 |---|---|---|
 | `scripts/load_demo_data.py` | Inserts missing establishments and weeks only; never updates or deletes; dry run unless `--commit`; `--extend-existing` continues series to last week | **Yes** |
 | `scripts/label_data_source.py` | Labels `unspecified` rows as `synthetic`/`observed` (dry run unless `--commit`) | Yes |
-| `scripts/seed.py`, `scripts/import_real_establishments.py` | Legacy: **wipe** data tables and regenerate. Refuse to run without `--i-understand-this-deletes-data` plus typing the DB host | **No** |
+| `scripts/legacy/seed.py`, `scripts/legacy/import_real_establishments.py` | Legacy: **wipe** data tables and regenerate. Refuse to run without `--i-understand-this-deletes-data` plus typing the DB host | **No** |
 
 ---
 
@@ -157,7 +170,7 @@ cd backend
 # create a migration after changing a model
 ./venv/bin/alembic revision --autogenerate -m "describe the change"
 
-# export all WCO records to data/wco_export_<date>.csv (never overwrites the archived file)
+# export all WCO records to data/exports/wco_export_<date>.csv
 ./venv/bin/python -m scripts.export_csv
 ```
 
@@ -171,8 +184,8 @@ cd backend
 batch retraining** after the change is committed. Bursts of edits are coalesced
 (`RETRAIN_DEBOUNCE_SECONDS`, default 20 s). Each run retrains from scratch with a chronological split,
 evaluates on held-out weeks against naive baselines, stores the version in the database, and activates it
-only if training succeeds. Locally the API trains in-process; on Vercel the API only queues jobs and the
-worker trains them (`./venv/bin/python -m scripts.retrain_worker`; see docs/DEPLOYMENT_VERCEL.md).
+only if training succeeds. The API trains in-process (locally and on Railway); a separate worker is
+optional (`RETRAIN_EXECUTOR=worker` + `python -m scripts.retrain_worker`, see docs/DEPLOYMENT.md).
 Manual retraining: **Admin → Retrain now**, or `POST /api/v1/forecast/train`.
 Status: **Admin → LSTM Forecast Model** or `GET /api/v1/forecast/training-status`.
 Details and limitations: [docs/ML_TRAINING_AND_EVALUATION.md](docs/ML_TRAINING_AND_EVALUATION.md).
@@ -181,12 +194,11 @@ Details and limitations: [docs/ML_TRAINING_AND_EVALUATION.md](docs/ML_TRAINING_A
 
 ## Deployment
 
-- **Vercel (one project, two Services):** root `vercel.json` routes `/api/*` to the FastAPI service and
-  everything else to Next.js. Project Root Directory = repository root. Full steps, environment
-  variables and the retraining worker: [docs/DEPLOYMENT_VERCEL.md](docs/DEPLOYMENT_VERCEL.md).
+- **Frontend → Vercel** (Root Directory `frontend`), **backend → Railway** (Root Directory `backend`),
+  **database → Supabase**. Both platforms deploy automatically from `main`. Settings, environment
+  variables and checks: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 - **`JWT_SECRET` is required** (the API won't start without it). Run `alembic upgrade head` yourself before
   deploying code that adds a migration; deployments never migrate automatically.
-- The `Procfile` (`web` + `worker`) still supports Render/Railway-style hosts.
 
 ---
 

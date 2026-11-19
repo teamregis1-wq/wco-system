@@ -8,10 +8,9 @@
 /**
  * Base URL of the FastAPI backend, used by browser code only.
  *
- * - Deployed on Vercel (frontend and backend as Services on ONE domain):
- *   same-origin "/api/v1" — the default when NEXT_PUBLIC_API_BASE is unset.
- * - Local two-terminal development (next dev on :3000, uvicorn on :8000):
- *   set NEXT_PUBLIC_API_BASE=http://localhost:8000/api/v1 in frontend/.env.local.
+ * - NEXT_PUBLIC_API_BASE set (e.g. https://<backend>.up.railway.app/api/v1, or
+ *   http://localhost:8000/api/v1 for local development): the browser calls it directly.
+ * - Unset: same-origin "/api/v1", which next.config.mjs proxies to BACKEND_URL.
  *
  * NEXT_PUBLIC_ values are inlined at BUILD time; change them and rebuild/redeploy.
  */

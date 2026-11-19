@@ -23,7 +23,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s [%(name)s] %(messa
 logger = logging.getLogger("wco")
 
 # API docs live under /api so they are reachable through the same public
-# /api/* route as the rest of the backend when deployed behind Vercel Services.
+# /api/* prefix as the rest of the backend (one path to proxy or route).
 app = FastAPI(title=settings.project_name, docs_url="/api/docs",
               redoc_url=None, openapi_url="/api/openapi.json")
 

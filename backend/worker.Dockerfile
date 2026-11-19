@@ -1,4 +1,5 @@
-# Retraining worker image (Vercel Daemon, Render/Railway worker, or any Docker host).
+# Optional stand-alone retraining worker image (any Docker host). Not needed on Railway:
+# there the API trains in-process. Use this only if the API runs with RETRAIN_EXECUTOR=worker.
 #   docker build -f worker.Dockerfile -t wco-retrain-worker .
 #   docker run --env-file .env wco-retrain-worker
 # Needs DATABASE_URL (or WORKER_DATABASE_URL, Session pooler :5432) and JWT_SECRET.
@@ -13,10 +14,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# CPU-only PyTorch first (the default Linux wheel pulls ~2 GB of CUDA libraries).
-RUN pip install --index-url https://download.pytorch.org/whl/cpu torch==2.2.0
-COPY requirements.txt requirements-worker.txt ./
-RUN pip install -r requirements-worker.txt
+# requirements.txt pulls the CPU-only PyTorch wheel on Linux.
+COPY requirements.txt ./
+RUN pip install -r requirements.txt
 
 COPY app ./app
 COPY scripts ./scripts

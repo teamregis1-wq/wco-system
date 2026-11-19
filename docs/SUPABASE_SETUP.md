@@ -89,9 +89,9 @@ Further accounts: sign in as admin → Admin → **+ Add user**. Public self-reg
 - It queues one retraining job. Run the worker (§7) to train the first model.
 - Later, to bring the series up to date before a presentation, run
   `./venv/bin/python -m scripts.load_demo_data --extend-existing --commit`.
-- Ids in the new database will not match the old one or `data/wco_export.csv`. Nothing relies on them;
+- Ids in the new database will not match the old one or `data/archive/wco_export.csv`. Nothing relies on them;
   `wco_code` is the stable key.
-- **Do not** import the old project's records or `data/batangas_city_restaurants_seed.csv` without first
+- **Do not** import the old project's records or `data/legacy/batangas_city_restaurants_seed.csv` without first
   reviewing where they came from. Don't run `label_data_source` on rows whose origin you haven't verified.
 
 ## 7. Train the first model (retraining worker)
@@ -103,7 +103,7 @@ Further accounts: sign in as admin → Admin → **+ Add user**. Public self-reg
 ```
 
 `/api/v1/forecast/training-status` (Admin → LSTM panel) then shows the active version, held-out
-metrics, and the worker heartbeat. Hosting options for a permanent worker: [DEPLOYMENT_VERCEL.md §5](DEPLOYMENT_VERCEL.md#5-the-retraining-worker).
+metrics, and the worker heartbeat. In production the Railway backend trains in-process; a separate worker is optional ([DEPLOYMENT.md](DEPLOYMENT.md) §6).
 
 ## 8. Verify against real PostgreSQL/PostGIS
 
