@@ -35,6 +35,8 @@ from app.schemas.schemas import (
 router = APIRouter(tags=["analysis"])
 
 OSRM_BASE = settings.osrm_base_url.rstrip("/")
+# The public OSRM server's table service accepts at most 100 coordinates per request.
+OSRM_MAX_TABLE_POINTS = 100
 OSRM_TIMEOUT = settings.osrm_timeout_seconds
 
 
@@ -171,7 +173,12 @@ def compute_collection_route(
 
     # --- Try OSRM road routing -----------------------------------------------
     all_points = [depot] + [(n["lat"], n["lng"]) for n in nodes]
-    dist_matrix = _osrm_table(all_points)
+    if len(all_points) > OSRM_MAX_TABLE_POINTS:
+        dist_matrix = None
+        warnings.append(f"{len(nodes)} stops exceed the OSRM table limit ({OSRM_MAX_TABLE_POINTS - 1} stops "
+                        "plus the depot); distances are straight-line estimates.")
+    else:
+        dist_matrix = _osrm_table(all_points)
     used_osrm = dist_matrix is not None
 
     def straight_km(i: int, j: int) -> float:

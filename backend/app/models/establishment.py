@@ -29,9 +29,11 @@ class Establishment(Base):
 
     latitude: Mapped[float] = mapped_column(Float)
     longitude: Mapped[float] = mapped_column(Float)
-    # SRID 4326 = standard GPS lat/lng coordinate system.
+    # SRID 4326 = standard GPS lat/lng coordinate system. Deferred: the API
+    # never reads the geometry in Python (spatial work uses lat/lng or SQL), so
+    # list endpoints don't pay for converting it on every row.
     geom: Mapped[object] = mapped_column(
-        Geometry(geometry_type="POINT", srid=4326), nullable=True
+        Geometry(geometry_type="POINT", srid=4326), nullable=True, deferred=True
     )
 
     # Operational metadata (optional, free for the research team to use).

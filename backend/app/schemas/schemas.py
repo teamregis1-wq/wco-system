@@ -169,15 +169,20 @@ class WCORecordCreate(BaseModel):
     notes: str | None = Field(default=None, max_length=500)
     data_source: DataSourceLiteral | None = None
 
-    @field_validator("week_date", "week_end_date")
+    # Only the week's START must not be in the future: the current, in-progress
+    # week may be recorded even though its end date is still ahead.
+    @field_validator("week_date")
     @classmethod
     def _not_future(cls, v: date | None) -> date | None:
         return _not_in_future(v)
 
     @model_validator(mode="after")
     def _end_after_start(self):
-        if self.week_end_date is not None and self.week_end_date < self.week_date:
-            raise ValueError("week_end_date must be on or after week_date")
+        if self.week_end_date is not None:
+            if self.week_end_date < self.week_date:
+                raise ValueError("week_end_date must be on or after week_date")
+            if (self.week_end_date - self.week_date).days > 13:
+                raise ValueError("week_end_date must be within the same week as week_date")
         return self
 
 
@@ -189,7 +194,9 @@ class WCORecordUpdate(BaseModel):
     notes: str | None = Field(default=None, max_length=500)
     data_source: DataSourceLiteral | None = None
 
-    @field_validator("week_date", "week_end_date")
+    # Only the week's START must not be in the future: the current, in-progress
+    # week may be recorded even though its end date is still ahead.
+    @field_validator("week_date")
     @classmethod
     def _not_future(cls, v: date | None) -> date | None:
         return _not_in_future(v)
@@ -314,8 +321,9 @@ class CollectionRouteRequest(BaseModel):
     depot_lat: float = Field(ge=-90.0, le=90.0, allow_inf_nan=False)
     depot_lng: float = Field(ge=-180.0, le=180.0, allow_inf_nan=False)
     depot_name: str = Field(default="Collection Depot", max_length=255)
-    # The public OSRM table service accepts at most 100 coordinates per call.
-    establishment_ids: list[int] = Field(max_length=99)
+    # Above OSRM_MAX_TABLE_POINTS the route falls back to straight-line distances
+    # (with a warning); this cap only guards against abusive requests.
+    establishment_ids: list[int] = Field(max_length=1000)
 
 
 class RouteStop(BaseModel):

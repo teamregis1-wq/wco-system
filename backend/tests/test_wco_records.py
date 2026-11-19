@@ -156,3 +156,14 @@ def test_quality_test_validation(client, researcher_headers, estab):
                        json=dict(body, ffa_pct=-1)).status_code == 422
     assert client.post(f"{API}/quality-tests", headers=researcher_headers,
                        json=dict(body, establishment_id=999999)).status_code == 404
+
+
+def test_current_in_progress_week_can_be_recorded(client, researcher_headers, estab):
+    """The week that started this week may be entered even though it ends in the future."""
+    monday = date.today() - timedelta(days=date.today().weekday())
+    r = client.post(f"{API}/wco/records", headers=researcher_headers,
+                    json=rec(estab.id, week=monday, week_end_date=str(monday + timedelta(days=6))))
+    assert r.status_code == 201, r.text
+    too_long = rec(estab.id, week=monday - timedelta(weeks=3),
+                   week_end_date=str(monday + timedelta(days=30)))
+    assert client.post(f"{API}/wco/records", headers=researcher_headers, json=too_long).status_code == 422

@@ -10,9 +10,10 @@ databases (the archived data/wco_export.csv uses ids 551–670). Use wco_code
 to match establishments across databases; never assume ids line up.
 """
 import argparse
+import csv
+from collections import Counter
 from datetime import date
 
-import pandas as pd
 from sqlalchemy import select
 
 from app.core.database import SessionLocal
@@ -33,15 +34,17 @@ def main(argv=None):
             .join(Establishment, Establishment.id == WCOGenerationRecord.establishment_id)
             .order_by(WCOGenerationRecord.establishment_id, WCOGenerationRecord.week_date)
         ).all()
-        df = pd.DataFrame(rows, columns=["establishment_id", "wco_code", "week_date",
-                                         "quantity_liters", "data_source"])
-        df["week_date"] = df["week_date"].astype(str)
-        df.to_csv(args.out, index=False)
-        print(f"Exported {len(df):,} rows to {args.out}")
-        if len(df):
-            print(f"Establishments: {df['establishment_id'].nunique()}")
-            print(f"Date range: {df['week_date'].min()} → {df['week_date'].max()}")
-            print(f"By data_source: {df['data_source'].value_counts().to_dict()}")
+        header = ["establishment_id", "wco_code", "week_date", "quantity_liters", "data_source"]
+        with open(args.out, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(header)
+            for r in rows:
+                w.writerow([r[0], r[1], r[2].isoformat(), r[3], r[4]])
+        print(f"Exported {len(rows):,} rows to {args.out}")
+        if rows:
+            print(f"Establishments: {len({r[0] for r in rows})}")
+            print(f"Date range: {min(r[2] for r in rows)} → {max(r[2] for r in rows)}")
+            print(f"By data_source: {dict(Counter(r[4] for r in rows))}")
     finally:
         db.close()
 

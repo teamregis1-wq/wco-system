@@ -42,6 +42,7 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
 from app.core.cache import cache_get, cache_set
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.models.establishment import Establishment
@@ -55,8 +56,8 @@ router = APIRouter(prefix="/gis", tags=["gis"])
 _M_PER_DEG_LAT = 110_574.0
 _M_PER_DEG_LNG_EQUATOR = 111_320.0
 
-# Spatial-weight distance band in metres.
-_WEIGHT_BAND_M = 1_500.0
+# Spatial-weight distance band in metres (GIS_BAND_M, default 1,500 m).
+_WEIGHT_BAND_M = float(settings.gis_band_m)
 
 # Gi* significance thresholds (two-tailed z-scores).
 _Z_HIGH = 2.576   # p < 0.01

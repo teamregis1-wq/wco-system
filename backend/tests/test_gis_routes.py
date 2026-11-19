@@ -179,6 +179,18 @@ def test_route_request_validation(client, viewer_headers):
     assert client.post(f"{API}/routes/collection-route", headers=viewer_headers,
                        json=_req([])).status_code == 400
     assert client.post(f"{API}/routes/collection-route", headers=viewer_headers,
-                       json=_req(list(range(1, 150)))).status_code == 422
+                       json=_req(list(range(1, 1002)))).status_code == 422
     assert client.post(f"{API}/routes/collection-route", headers=viewer_headers,
                        json=dict(_req([1]), depot_lat=200)).status_code == 422
+
+
+def test_more_stops_than_osrm_limit_falls_back(client, viewer_headers, db, monkeypatch):
+    """'Select all' (e.g. 120 establishments) must still produce a route."""
+    called = []
+    monkeypatch.setattr(analysis, "OSRM_MAX_TABLE_POINTS", 3)
+    monkeypatch.setattr(analysis, "_osrm_table", lambda p, timeout=0: called.append(1) or None)
+    sites = _route_sites(db)                               # 3 stops + depot = 4 points > 3
+    body = client.post(f"{API}/routes/collection-route", headers=viewer_headers,
+                       json=_req([s.id for s in sites])).json()
+    assert body["total_establishments"] == 3 and body["distance_basis"] == "straight_line"
+    assert called == [] and any("OSRM table limit" in w for w in body["warnings"])
