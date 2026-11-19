@@ -47,6 +47,17 @@ def _not_in_future(d: date | None) -> date | None:
     return d
 
 
+def _week_starts_monday(d: date | None) -> date | None:
+    # Collection weeks run Monday–Sunday. A week starting on any other day would
+    # sit between two regular weeks and break the 7-day series the forecaster reads.
+    if d is not None and d.weekday() != 0:
+        monday = d - timedelta(days=d.weekday())
+        raise ValueError(
+            f"{d} is a {d.strftime('%A')}; collection weeks run Monday to Sunday, "
+            f"so week_date must be a Monday (the week containing {d} starts {monday})")
+    return d
+
+
 # --- Auth -------------------------------------------------------------------
 
 class UserCreate(BaseModel):
@@ -174,7 +185,7 @@ class WCORecordCreate(BaseModel):
     @field_validator("week_date")
     @classmethod
     def _not_future(cls, v: date | None) -> date | None:
-        return _not_in_future(v)
+        return _week_starts_monday(_not_in_future(v))
 
     @model_validator(mode="after")
     def _end_after_start(self):
@@ -199,7 +210,7 @@ class WCORecordUpdate(BaseModel):
     @field_validator("week_date")
     @classmethod
     def _not_future(cls, v: date | None) -> date | None:
-        return _not_in_future(v)
+        return _week_starts_monday(_not_in_future(v))
 
     @field_validator("quantity_liters")
     @classmethod

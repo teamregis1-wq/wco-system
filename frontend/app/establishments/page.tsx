@@ -10,7 +10,7 @@ import { API_BASE, getToken } from "@/lib/api";
 import ForecastChart from "@/components/ForecastChart";
 import type { ForecastPoint } from "@/lib/api";
 import { toast, Toaster } from "@/components/Toast";
-import { glassStrong } from "@/lib/theme";
+import { popup } from "@/lib/theme";
 import RetrainStatusBadge from "@/components/RetrainStatusBadge";
 import {
   parseCSV, validateEstablishments, validateWcoRecords,
@@ -171,6 +171,13 @@ async function errorMessage(res: Response): Promise<string> {
  *  shift the date back a day). */
 function localISO(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** The Monday that starts the collection week containing `iso` (weeks run Mon–Sun). */
+function mondayOf(iso: string): string {
+  const d = new Date(iso + "T00:00:00");
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  return localISO(d);
 }
 
 function addSixDays(startStr: string): string {
@@ -413,6 +420,7 @@ function WCORecordsModal({
 
   // Add-record form state
   const [weekDate,    setWeekDate]    = useState("");
+  const [snapNote,    setSnapNote]    = useState<string | null>(null);
   const [weekEndDate, setWeekEndDate] = useState("");
   const [quantity,    setQuantity]    = useState("");
   const [notes,       setNotes]       = useState("");
@@ -469,7 +477,7 @@ function WCORecordsModal({
         }),
       });
       setRecords(prev => [rec, ...prev]);
-      setWeekDate(""); setWeekEndDate(""); setQuantity(""); setNotes("");
+      setWeekDate(""); setWeekEndDate(""); setQuantity(""); setNotes(""); setSnapNote(null);
       toast("WCO record added.");
       dataChanged();
       onRecordChanged?.();
@@ -662,11 +670,19 @@ function WCORecordsModal({
                 <input
                   style={input} type="date" value={weekDate} required
                   onChange={e => {
-                    setWeekDate(e.target.value);
-                    // Auto-fill end date when start is picked
-                    if (e.target.value) setWeekEndDate(addSixDays(e.target.value));
+                    // Any day picked selects its Monday-to-Sunday collection week.
+                    const picked = e.target.value;
+                    const start = picked ? mondayOf(picked) : "";
+                    setWeekDate(start);
+                    setSnapNote(picked && start !== picked
+                      ? `${new Date(picked + "T00:00:00").toLocaleDateString("en-PH", { weekday: "long", month: "short", day: "numeric" })} is inside the week that starts Monday ${new Date(start + "T00:00:00").toLocaleDateString("en-PH", { month: "short", day: "numeric" })}.`
+                      : null);
+                    if (start) setWeekEndDate(addSixDays(start));
                   }}
                 />
+                <div style={{ fontSize: 10, color: snapNote ? "#0f6e56" : "#6b8a80", marginTop: 2 }}>
+                  {snapNote ?? "Weeks run Monday to Sunday."}
+                </div>
               </div>
               <div>
                 <label style={{ ...label, color: "#166534" }}>End date *</label>
@@ -765,7 +781,7 @@ function WCORecordsModal({
                       </>
                     ) : (
                       <>
-                        <td style={{ padding: "9px 12px", borderBottom: "1px solid #f1f5f9", color: "#0f6e56", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
+                        <td style={{ padding: "9px 12px", borderBottom: "1px solid #f1f5f9", color: "#0f6e56", fontWeight: 700, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
                           {r.quantity_liters.toLocaleString(undefined, { maximumFractionDigits: 1 })} L
                         </td>
                         <td style={{ padding: "9px 12px", borderBottom: "1px solid #f1f5f9", color: "#64748b", fontSize: 12 }}>
@@ -1713,9 +1729,8 @@ const MO: Record<string, React.CSSProperties> = {
     padding: 16,
   },
   modal: {
-    ...glassStrong, borderRadius: 22, padding: 28,
+    ...popup, borderRadius: 22, padding: 28,
     width: "100%", maxWidth: 560, maxHeight: "90vh",
     overflowY: "auto",
-    boxShadow: "0 24px 70px rgba(6,40,30,0.28), inset 0 1px 0 rgba(255,255,255,0.7)",
   },
 };

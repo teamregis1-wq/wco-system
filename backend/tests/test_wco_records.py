@@ -167,3 +167,21 @@ def test_current_in_progress_week_can_be_recorded(client, researcher_headers, es
     too_long = rec(estab.id, week=monday - timedelta(weeks=3),
                    week_end_date=str(monday + timedelta(days=30)))
     assert client.post(f"{API}/wco/records", headers=researcher_headers, json=too_long).status_code == 422
+
+
+def test_week_must_start_on_monday(client, researcher_headers, estab):
+    """A Tuesday-start week would sit between two regular weeks and break forecasting."""
+    tuesday = MONDAY + timedelta(days=1)
+    r = client.post(f"{API}/wco/records", headers=researcher_headers, json=rec(estab.id, week=tuesday))
+    assert r.status_code == 422
+    assert "must be a Monday" in r.text and str(MONDAY) in r.text  # suggests the right Monday
+
+    ok = client.post(f"{API}/wco/records", headers=researcher_headers, json=rec(estab.id))
+    assert ok.status_code == 201
+    r = client.patch(f"{API}/wco/records/{ok.json()['id']}", headers=researcher_headers,
+                     json={"week_date": str(tuesday)})
+    assert r.status_code == 422 and "must be a Monday" in r.text
+    # Bulk import applies the same rule (and imports nothing).
+    r = client.post(f"{API}/wco/records/bulk", headers=researcher_headers,
+                    json=[rec(estab.id, week=MONDAY - timedelta(weeks=1)), rec(estab.id, week=tuesday)])
+    assert r.status_code == 422

@@ -31,6 +31,15 @@ export const glassStrong: CSSProperties = {
   background: "rgba(255,255,255,0.86)",
 };
 
+/** Pop-up cards (modals): near-solid white so dense forms and tables read cleanly. */
+export const popup: CSSProperties = {
+  background: "rgba(255,255,255,0.97)",
+  backdropFilter: "blur(20px) saturate(140%)",
+  WebkitBackdropFilter: "blur(20px) saturate(140%)",
+  border: "1px solid rgba(255,255,255,0.95)",
+  boxShadow: "0 28px 80px rgba(6,40,30,0.30), 0 2px 6px rgba(6,40,30,0.08)",
+};
+
 /** Subtle inner glass tile (inside a glass card). */
 export const glassTile: CSSProperties = {
   background: "rgba(255,255,255,0.55)",

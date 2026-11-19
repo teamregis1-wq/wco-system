@@ -318,6 +318,15 @@ export function validateWcoRecords(parsed: ParsedCSV, establishmentId: number): 
     if (d.error) return fail(`week_date: ${d.error}`);
     const week_date = d.value!;
     if (week_date > maxDate) return fail(`week_date ${week_date} is in the future`);
+    // Same rule as the API: collection weeks run Monday to Sunday.
+    const day = new Date(week_date + "T00:00:00");
+    if (day.getDay() !== 1) {
+      const monday = new Date(day);
+      monday.setDate(day.getDate() - ((day.getDay() + 6) % 7));
+      const iso = `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, "0")}-${String(monday.getDate()).padStart(2, "0")}`;
+      const name = day.toLocaleDateString("en-US", { weekday: "long" });
+      return fail(`week_date ${week_date} is a ${name}; weeks start on Monday (use ${iso})`);
+    }
     if (seenWeeks.has(week_date)) return fail(`duplicate week_date ${week_date} in this file`);
 
     const qtyRaw = pick(row, "quantity_liters", "quantity", "liters", "litres", "volume", "amount");

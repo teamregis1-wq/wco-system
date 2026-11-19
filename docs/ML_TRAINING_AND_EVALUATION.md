@@ -124,6 +124,9 @@ seasonal naive 3.73 L and naive 9.87 L.
   weeks** inside the 12-week input are linearly interpolated *for the forecast only* and reported in
   `warnings`. Longer gaps, irregular intervals or duplicates → HTTP 422 with the exact reason. Training
   never uses interpolated values.
+- Collection weeks run **Monday to Sunday**, so `week_date` must be a Monday. The API (single, edit
+  and bulk), the CSV importer and the entry form enforce this; the form snaps any picked day to its
+  week's Monday. A record off that schedule would fall between two regular weeks and break the series.
 - The response includes `forecast_origin` (the last observed week). If data are stale, a warning says
   the "forecast" weeks may already be in the past.
 - Aggregate forecast = sum of per-establishment forecasts by calendar week (batched). Skipped

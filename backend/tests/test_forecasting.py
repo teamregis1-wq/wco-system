@@ -140,6 +140,11 @@ def test_trailing_window_rules():
     odd = rows[:15] + [(rows[14][0] + timedelta(days=9), 1.0)]
     with pytest.raises(InsufficientHistoryError, match="irregular"):
         trailing_window(odd, 12)
+    # An off-schedule (non-Monday) record is named so the user can fix it.
+    assert D0.weekday() == 0
+    stray = rows[:15] + [(rows[14][0] + timedelta(days=1), 400.0), (rows[15][0], 15.0)]
+    with pytest.raises(InsufficientHistoryError, match=r"record dated .* \(Tuesday\) is off the Monday-start"):
+        trailing_window(stray, 12)
 
 
 def test_short_gap_is_interpolated_for_inference_only():

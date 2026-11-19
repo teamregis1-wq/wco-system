@@ -8,7 +8,7 @@ import { API_BASE, getToken } from "@/lib/api";
 import { useAuth, type Role } from "@/lib/auth-context";
 import { toast, Toaster } from "@/components/Toast";
 import { downloadCSV } from "@/lib/csv";
-import { glass, glassStrong } from "@/lib/theme";
+import { glass, popup } from "@/lib/theme";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -1004,8 +1004,7 @@ const S: Record<string, React.CSSProperties> = {
     zIndex: 9999,
   },
   modal: {
-    ...glassStrong, borderRadius: 22, padding: 28, width: 420, maxWidth: "calc(100vw - 24px)",
+    ...popup, borderRadius: 22, padding: 28, width: 420, maxWidth: "calc(100vw - 24px)",
     maxHeight: "92vh", overflowY: "auto",
-    boxShadow: "0 24px 70px rgba(6,40,30,0.28), inset 0 1px 0 rgba(255,255,255,0.7)",
   },
 } as Record<string, React.CSSProperties>;

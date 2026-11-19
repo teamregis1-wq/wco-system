@@ -77,6 +77,10 @@ def trailing_window(rows: list[tuple[date, float]], min_weeks: int = MIN_HISTORY
                 break_reason = f"{delta // 7 - 1} missing week(s) between {d0} and {d1}"
             else:
                 break_reason = f"irregular {delta}-day interval between {d0} and {d1}"
+                off = [d for d in (d0, d1) if d.weekday() != 0]
+                if len(off) == 1:
+                    break_reason += (f"; the record dated {off[0]} ({off[0]:%A}) is off the "
+                                     "Monday-start weekly schedule, so edit or delete it")
             break
         i -= 1
     run = list(reversed(filled))
