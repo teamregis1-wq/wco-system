@@ -57,7 +57,7 @@ def test_single_linear_migration_head():
     cfg = Config()
     cfg.set_main_option("script_location", str(BACKEND / "alembic"))
     heads = ScriptDirectory.from_config(cfg).get_heads()
-    assert heads == ["b7c8d9e0f1a2"]
+    assert heads == ["c9d0e1f2a3b4"]
 
 
 def test_upgrade_head_matches_models():
@@ -145,3 +145,18 @@ def test_health_endpoints(client):
     # The test DB is built with create_all (no alembic_version row) → not "up to date".
     assert r.status_code in (200, 503)
     assert r.json()["database"] == "ok"
+
+
+@pytest.mark.parametrize("url,expect_ssl,expect_noprep", [
+    ("postgresql+psycopg://u:p@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres", True, False),
+    ("postgresql+psycopg://u:p@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres", True, True),
+    ("postgresql+psycopg://u:p@localhost:5432/postgres", False, False),
+    ("postgresql+psycopg://u:p@db.example.com:5432/postgres?sslmode=verify-full", False, False),
+])
+def test_pg_connect_args(url, expect_ssl, expect_noprep):
+    from app.core.database import pg_connect_args
+    args = pg_connect_args(url)
+    assert ("sslmode" in args) is expect_ssl
+    if expect_ssl:
+        assert args["sslmode"] == "require"
+    assert ("prepare_threshold" in args and args["prepare_threshold"] is None) is expect_noprep

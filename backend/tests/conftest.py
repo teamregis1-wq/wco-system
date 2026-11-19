@@ -1,10 +1,15 @@
 """Shared test fixtures.
 
-The suite runs against an in-memory SQLite database so it needs no network
-or credentials. PostGIS functions used by GeoAlchemy are replaced by small
-stand-ins that produce valid EWKB points; anything that genuinely needs
-PostgreSQL/PostGIS lives in test_postgres_integration.py and runs only when
-TEST_DATABASE_URL is set.
+Default: an in-memory SQLite database (no network or credentials). PostGIS
+functions used by GeoAlchemy are replaced by small stand-ins that produce
+valid EWKB points.
+
+PostgreSQL mode: set TEST_DATABASE_URL (Session pooler or direct connection)
+to run the WHOLE suite against real PostgreSQL + PostGIS. Every test table is
+created inside a separate schema (WCO_TEST_SCHEMA, default "wco_test") via
+search_path, truncated between tests, and the schema is dropped at the end —
+the application's tables in "public" are never touched. The schema name
+"public" is refused.
 """
 import os
 import struct
@@ -15,8 +20,12 @@ from pathlib import Path
 
 # ── Environment must be set before any app module is imported ────────────────
 _ARTIFACTS = tempfile.mkdtemp(prefix="wco-test-artifacts-")
+PG_URL = os.environ.get("TEST_DATABASE_URL", "").strip()
+PG_SCHEMA = os.environ.get("WCO_TEST_SCHEMA", "wco_test").strip()
+if PG_URL and (PG_SCHEMA.lower() == "public" or not PG_SCHEMA.isidentifier()):
+    raise SystemExit("WCO_TEST_SCHEMA must be a plain identifier other than 'public'.")
 os.environ.update({
-    "DATABASE_URL": "sqlite://",
+    "DATABASE_URL": PG_URL or "sqlite://",
     "JWT_SECRET": "test-secret-" + "x" * 40,
     "APP_ENV": "test",
     "AUTO_RETRAIN_ENABLED": "true",
@@ -27,6 +36,7 @@ os.environ.update({
     "ML_MAX_EPOCHS": "4",
     "ML_PATIENCE": "2",
     "CORS_ORIGINS": "http://localhost:3000",
+    "ML_BUNDLED_FALLBACK": "false",
 })
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -66,7 +76,24 @@ def install_spatial_stubs(dbapi_conn, _record=None):
     dbapi_conn.execute("PRAGMA foreign_keys=ON")
 
 
-event.listen(database.engine, "connect", install_spatial_stubs)
+def _pg_search_path(dbapi_conn, _record=None):
+    # Tables are created unqualified, so they land in the first search_path
+    # schema (the throwaway test schema). PostGIS stays reachable via public/extensions.
+    cur = dbapi_conn.cursor()
+    cur.execute(f"SET search_path TO {PG_SCHEMA}, public, extensions")
+    cur.close()
+    dbapi_conn.commit()
+
+
+if PG_URL:
+    from sqlalchemy import create_engine, text as _text
+    _admin = create_engine(database.engine.url, poolclass=__import__("sqlalchemy.pool", fromlist=["NullPool"]).NullPool,
+                           connect_args=database.pg_connect_args(str(database.engine.url)))
+    with _admin.begin() as _c:
+        _c.execute(_text(f"CREATE SCHEMA IF NOT EXISTS {PG_SCHEMA}"))
+    event.listen(database.engine, "connect", _pg_search_path)
+else:
+    event.listen(database.engine, "connect", install_spatial_stubs)
 
 import app.models  # noqa: E402,F401
 from app.core.database import Base, SessionLocal, engine  # noqa: E402
@@ -75,11 +102,38 @@ from app.models import Establishment, User, WCOGenerationRecord  # noqa: E402
 from app.services import model_store, retraining  # noqa: E402
 from app.services.retraining import RetrainingScheduler  # noqa: E402
 
+if PG_URL:
+    # Never contend with a real retraining worker on the same database.
+    retraining.ADVISORY_LOCK_KEY = retraining.ADVISORY_LOCK_KEY + 777
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _pg_schema_lifecycle():
+    if not PG_URL:
+        yield
+        return
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    yield
+    engine.dispose()
+    with _admin.begin() as c:
+        c.execute(_text(f"DROP SCHEMA IF EXISTS {PG_SCHEMA} CASCADE"))
+    _admin.dispose()
+
+
+def _reset_tables():
+    if PG_URL:
+        names = ", ".join(t.name for t in Base.metadata.sorted_tables)
+        with engine.begin() as c:
+            c.execute(_text(f"TRUNCATE TABLE {names} RESTART IDENTITY CASCADE"))
+    else:
+        Base.metadata.drop_all(engine)
+        Base.metadata.create_all(engine)
+
 
 @pytest.fixture(autouse=True)
 def fresh_db():
-    Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
+    _reset_tables()
     model_store.invalidate_cache()
     sched = RetrainingScheduler(SessionLocal, engine, enabled=True, debounce_seconds=3600)
     retraining.set_scheduler(sched)

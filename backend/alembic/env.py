@@ -56,10 +56,13 @@ def run_migrations_online() -> None:
         _configure_and_run(external)
         return
 
+    from app.core.database import pg_connect_args
+    url = settings.database_url
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args=pg_connect_args(url) if url.startswith("postgresql") else {},
     )
     with connectable.connect() as connection:
         _configure_and_run(connection)

@@ -4,6 +4,7 @@ Every model inherits from Base. Routes get a session via the get_db
 dependency, which guarantees the session is closed after each request.
 """
 import logging
+import os
 from collections.abc import Generator
 
 from sqlalchemy import create_engine, text
@@ -23,6 +24,26 @@ def safe_url(url: str) -> str:
         return "<unparseable database URL>"
 
 
+_LOCAL_HOSTS = {"", "localhost", "127.0.0.1", "::1"}
+
+
+def pg_connect_args(url: str) -> dict:
+    """Psycopg 3 connection arguments for a PostgreSQL URL.
+
+    * SSL is required for non-local hosts unless the URL sets ``sslmode``.
+    * Supabase's Transaction pooler (port 6543, PgBouncer/Supavisor transaction
+      mode) cannot keep prepared statements between transactions, so
+      Psycopg's automatic statement preparation is disabled there.
+    """
+    u = make_url(url)
+    args: dict = {"connect_timeout": 10, "application_name": "wco-atlas-api"}
+    if (u.host or "") not in _LOCAL_HOSTS and "sslmode" not in u.query:
+        args["sslmode"] = settings.db_sslmode
+    if u.port == 6543:
+        args["prepare_threshold"] = None
+    return args
+
+
 def build_engine(url: str) -> Engine:
     """Create an engine with pool settings appropriate for the dialect."""
     if url.startswith("sqlite"):
@@ -35,16 +56,23 @@ def build_engine(url: str) -> Engine:
     return create_engine(
         url,
         pool_pre_ping=True,   # transparently reconnect dropped connections
-        pool_size=3,          # Supabase session pooler allows few clients — stay small
-        max_overflow=2,
+        pool_size=settings.db_pool_size,        # each process/instance has its own pool — stay small
+        max_overflow=settings.db_max_overflow,
         pool_recycle=900,     # retire idle connections after 15 min
         pool_timeout=20,      # fail fast instead of hanging when pool is exhausted
-        connect_args={"connect_timeout": 10, "application_name": "wco-atlas-api"},
+        connect_args=pg_connect_args(url),
         echo=False,           # set True to see every SQL statement while learning
     )
 
 
-engine = build_engine(settings.database_url)
+def active_database_url() -> str:
+    """The worker process uses WORKER_DATABASE_URL when set; everything else DATABASE_URL."""
+    if os.environ.get("WCO_PROCESS_ROLE") == "worker" and settings.worker_database_url:
+        return settings.worker_database_url
+    return settings.database_url
+
+
+engine = build_engine(active_database_url())
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

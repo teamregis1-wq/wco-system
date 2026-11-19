@@ -22,7 +22,10 @@ from app.routers import analysis, auth, establishments, forecast, gis, quality_t
 logging.basicConfig(level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s")
 logger = logging.getLogger("wco")
 
-app = FastAPI(title=settings.project_name)
+# API docs live under /api so they are reachable through the same public
+# /api/* route as the rest of the backend when deployed behind Vercel Services.
+app = FastAPI(title=settings.project_name, docs_url="/api/docs",
+              redoc_url=None, openapi_url="/api/openapi.json")
 
 
 def _json_safe(obj):
@@ -68,7 +71,8 @@ def on_startup() -> None:
                          status.get("migration_revision"), status.get("migration_head"))
             return
         from app.services.retraining import get_scheduler
-        get_scheduler().start()
+        logger.info("Retraining executor: %s", settings.effective_retrain_executor)
+        get_scheduler().start()   # no-op in "worker" mode (the worker process owns execution)
 
     threading.Thread(target=_warm_and_recover, daemon=True).start()
 
@@ -138,12 +142,14 @@ app.include_router(quality_tests.router, prefix=prefix)
 
 
 @app.get("/health", tags=["health"])
+@app.get(f"{settings.api_v1_prefix}/health", tags=["health"], include_in_schema=False)
 def health():
     """Simple liveness check. Hit this first to confirm the server is up."""
     return {"status": "ok", "service": settings.project_name}
 
 
 @app.get("/health/db", tags=["health"])
+@app.get(f"{settings.api_v1_prefix}/health/db", tags=["health"], include_in_schema=False)
 def health_db():
     """Readiness: database reachable, PostGIS installed, migrations current.
 
@@ -160,6 +166,6 @@ def health_db():
 def root():
     return {
         "message": "WCO Predictive Mapping API",
-        "docs": "/docs",
+        "docs": "/api/docs",
         "health": "/health",
     }

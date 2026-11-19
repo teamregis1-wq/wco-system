@@ -21,6 +21,12 @@ _KNOWN_INSECURE_SECRETS = {
 }
 
 
+def running_on_vercel() -> bool:
+    """True inside a Vercel build or function (Vercel sets these system variables)."""
+    import os
+    return bool(os.environ.get("VERCEL") or os.environ.get("VERCEL_ENV"))
+
+
 def normalize_database_url(url: str) -> str:
     """Make Supabase-style URLs use the installed Psycopg 3 driver.
 
@@ -46,9 +52,19 @@ class Settings(BaseSettings):
     app_env: str = "development"
 
     # --- Database ---
-    # Supabase connection string (Session pooler recommended). Format:
-    # postgresql+psycopg://postgres.<ref>:<password>@<host>:5432/postgres
+    # Supabase connection string. Format:
+    # postgresql+psycopg://postgres.<ref>:<password>@<pooler-host>:<port>/postgres
+    #   local machine / long-running server: Session pooler (port 5432)
+    #   Vercel functions (serverless):        Transaction pooler (port 6543)
     database_url: str
+    # Used instead of DATABASE_URL by the retraining worker process (it holds
+    # a session-level advisory lock, so it needs the Session pooler, port 5432).
+    worker_database_url: str = ""
+    # SSL for non-local PostgreSQL hosts unless the URL sets sslmode itself.
+    db_sslmode: str = "require"
+    # Per-process connection pool. Keep small: every serverless instance has its own pool.
+    db_pool_size: int = 3
+    db_max_overflow: int = 2
 
     # --- Auth ---
     # REQUIRED. Generate with: python -c "import secrets; print(secrets.token_hex(32))"
@@ -86,6 +102,17 @@ class Settings(BaseSettings):
 
     # --- Forecasting / automatic batch retraining ---
     auto_retrain_enabled: bool = True
+    # Who executes queued retraining jobs:
+    #   "inprocess" — this API process trains (local development, single server)
+    #   "worker"    — the API only queues jobs; scripts/retrain_worker.py trains
+    # Empty = "worker" on Vercel (serverless functions cannot run background
+    # training reliably), otherwise "inprocess".
+    retrain_executor: str = ""
+    # Transient failures (not data-validation failures) are retried automatically.
+    retrain_max_attempts: int = 3
+    # Worker loop: how often it looks for due jobs and refreshes its heartbeat.
+    worker_poll_seconds: float = 5.0
+    worker_heartbeat_seconds: float = 15.0
     # Rapid edits within this window are coalesced into ONE retraining job.
     retrain_debounce_seconds: float = 20.0
     # How often each worker checks the database for a pending job it did not
@@ -105,6 +132,13 @@ class Settings(BaseSettings):
     # Minimum consecutive weekly records an establishment needs before the
     # API will produce a forecast for it (the LSTM input window is 12 weeks).
     ml_min_history_weeks: int = 12
+    # Serve the bundled pre-audit model until the first model is trained.
+    ml_bundled_fallback: bool = True
+
+    # --- GIS ---
+    # Gi* fixed distance band (metres). See docs/ML_TRAINING_AND_EVALUATION.md §9
+    # for the sensitivity analysis behind choosing it.
+    gis_band_m: float = 1500.0
 
     # --- Routing ---
     # The public OSRM demo server has a fair-use policy and no SLA; point this
@@ -120,6 +154,11 @@ class Settings(BaseSettings):
         if not v or not v.strip():
             raise ValueError("DATABASE_URL is empty. See backend/.env.example.")
         return normalize_database_url(v)
+
+    @field_validator("worker_database_url")
+    @classmethod
+    def _normalize_worker_url(cls, v: str) -> str:
+        return normalize_database_url(v) if v and v.strip() else ""
 
     @field_validator("jwt_secret")
     @classmethod
@@ -141,6 +180,20 @@ class Settings(BaseSettings):
         if v not in DATA_SOURCES:
             raise ValueError(f"DEFAULT_DATA_SOURCE must be one of {sorted(DATA_SOURCES)}")
         return v
+
+    @field_validator("retrain_executor")
+    @classmethod
+    def _valid_executor(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        if v not in ("", "inprocess", "worker"):
+            raise ValueError('RETRAIN_EXECUTOR must be "inprocess", "worker", or empty')
+        return v
+
+    @property
+    def effective_retrain_executor(self) -> str:
+        if self.retrain_executor:
+            return self.retrain_executor
+        return "worker" if running_on_vercel() else "inprocess"
 
     @property
     def cors_origins_list(self) -> list[str]:
