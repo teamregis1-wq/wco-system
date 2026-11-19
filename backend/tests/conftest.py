@@ -5,11 +5,15 @@ functions used by GeoAlchemy are replaced by small stand-ins that produce
 valid EWKB points.
 
 PostgreSQL mode: set TEST_DATABASE_URL (Session pooler or direct connection)
-to run the WHOLE suite against real PostgreSQL + PostGIS. Every test table is
-created inside a separate schema (WCO_TEST_SCHEMA, default "wco_test") via
-search_path, truncated between tests, and the schema is dropped at the end —
-the application's tables in "public" are never touched. The schema name
-"public" is refused.
+to run the WHOLE suite against real PostgreSQL + PostGIS inside a separate
+schema (WCO_TEST_SCHEMA, default "wco_test") that is dropped at the end.
+The application's "public" schema is protected by three independent layers:
+  1. schema_translate_map qualifies every statement with the test schema
+     (DDL included), so nothing depends on search_path resolution;
+  2. the test connections' search_path excludes "public" entirely;
+  3. a tripwire snapshots public's tables and row counts before the run and
+     fails the run if anything in public changed.
+The schema name "public" is refused.
 """
 import os
 import struct
@@ -77,10 +81,10 @@ def install_spatial_stubs(dbapi_conn, _record=None):
 
 
 def _pg_search_path(dbapi_conn, _record=None):
-    # Tables are created unqualified, so they land in the first search_path
-    # schema (the throwaway test schema). PostGIS stays reachable via public/extensions.
+    # NO "public" here: raw SQL in tests can never resolve to the app's tables.
+    # PostGIS (Supabase installs it in "extensions") stays reachable.
     cur = dbapi_conn.cursor()
-    cur.execute(f"SET search_path TO {PG_SCHEMA}, public, extensions")
+    cur.execute(f"SET search_path TO {PG_SCHEMA}, extensions")
     cur.close()
     dbapi_conn.commit()
 
@@ -92,6 +96,8 @@ if PG_URL:
     with _admin.begin() as _c:
         _c.execute(_text(f"CREATE SCHEMA IF NOT EXISTS {PG_SCHEMA}"))
     event.listen(database.engine, "connect", _pg_search_path)
+    # Layer 1: every ORM/Core/DDL statement is explicitly qualified with the test schema.
+    database.engine.update_execution_options(schema_translate_map={None: PG_SCHEMA})
 else:
     event.listen(database.engine, "connect", install_spatial_stubs)
 
@@ -107,23 +113,40 @@ if PG_URL:
     retraining.ADVISORY_LOCK_KEY = retraining.ADVISORY_LOCK_KEY + 777
 
 
+def _public_snapshot():
+    """Tables and exact row counts of the application's public schema."""
+    with _admin.connect() as c:
+        tables = [r[0] for r in c.execute(_text(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY 1"))]
+        return {t: c.execute(_text(f'SELECT COUNT(*) FROM public."{t}"')).scalar() for t in tables}
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _pg_schema_lifecycle():
     if not PG_URL:
         yield
         return
-    Base.metadata.drop_all(engine)
+    before = _public_snapshot()
+    with engine.connect() as c:   # refuse to run unless connections really point at the test schema
+        assert c.execute(_text("SELECT current_schema()")).scalar() == PG_SCHEMA
+        assert "public" not in c.execute(_text("SHOW search_path")).scalar()
+    Base.metadata.drop_all(engine)      # qualified: only {PG_SCHEMA}.* tables
     Base.metadata.create_all(engine)
-    yield
-    engine.dispose()
-    with _admin.begin() as c:
-        c.execute(_text(f"DROP SCHEMA IF EXISTS {PG_SCHEMA} CASCADE"))
-    _admin.dispose()
+    try:
+        yield
+    finally:
+        engine.dispose()
+        with _admin.begin() as c:
+            c.execute(_text(f"DROP SCHEMA IF EXISTS {PG_SCHEMA} CASCADE"))
+        after = _public_snapshot()
+        _admin.dispose()
+        # Layer 3: tripwire — the app's public schema must be exactly as before.
+        assert after == before, f"public schema changed during the test run: {before} -> {after}"
 
 
 def _reset_tables():
     if PG_URL:
-        names = ", ".join(t.name for t in Base.metadata.sorted_tables)
+        names = ", ".join(f"{PG_SCHEMA}.{t.name}" for t in Base.metadata.sorted_tables)
         with engine.begin() as c:
             c.execute(_text(f"TRUNCATE TABLE {names} RESTART IDENTITY CASCADE"))
     else:

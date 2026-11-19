@@ -43,10 +43,9 @@ def pg():
 
 
 def test_connection_uses_ssl(pg):
+    """The client → Supabase connection is encrypted (pooler → Postgres is internal to Supabase)."""
     with pg.connect() as c:
-        ssl = c.execute(text("SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()")).scalar()
-    # Through Supavisor the backend connection may be internal; when visible it must be SSL.
-    assert ssl in (True, None)
+        assert c.connection.dbapi_connection.pgconn.ssl_in_use
 
 
 def test_postgis_installed_and_resolvable(pg):
@@ -112,10 +111,10 @@ def test_spatial_queries_and_constraints_rolled_back(pg):
         tx = c.begin()
         try:
             c.execute(text(
-                "INSERT INTO establishments (wco_code, name, type, latitude, longitude, geom, "
+                "INSERT INTO establishments (id, wco_code, name, type, latitude, longitude, geom, "
                 "consent_given, is_active, created_at, data_source) VALUES "
-                "('ZZTEST1','t','restaurant',13.75,121.05, ST_SetSRID(ST_MakePoint(121.05,13.75),4326), false, true, now(), 'synthetic'),"
-                "('ZZTEST2','t','restaurant',13.76,121.05, ST_SetSRID(ST_MakePoint(121.05,13.76),4326), false, true, now(), 'synthetic')"))
+                "(-9001,'ZZTEST1','t','restaurant',13.75,121.05, ST_SetSRID(ST_MakePoint(121.05,13.75),4326), false, true, now(), 'synthetic'),"
+                "(-9002,'ZZTEST2','t','restaurant',13.76,121.05, ST_SetSRID(ST_MakePoint(121.05,13.76),4326), false, true, now(), 'synthetic')"))
             d = c.execute(text(
                 "SELECT ST_Distance(a.geom::geography, b.geom::geography) FROM establishments a, establishments b "
                 "WHERE a.wco_code='ZZTEST1' AND b.wco_code='ZZTEST2'")).scalar()
@@ -129,16 +128,16 @@ def test_spatial_queries_and_constraints_rolled_back(pg):
                 sp = c.begin_nested()
                 with pytest.raises(Exception):
                     c.execute(text(
-                        "INSERT INTO wco_generation_records (establishment_id, week_date, quantity_liters, "
-                        f"created_at) SELECT id, DATE '2026-01-05', {bad}, now() FROM establishments "
+                        "INSERT INTO wco_generation_records (id, establishment_id, week_date, quantity_liters, "
+                        f"created_at) SELECT -9001, id, DATE '2026-01-05', {bad}, now() FROM establishments "
                         "WHERE wco_code='ZZTEST1'"))
                 sp.rollback()
             sp = c.begin_nested()
-            c.execute(text("INSERT INTO wco_generation_records (establishment_id, week_date, quantity_liters, created_at) "
-                           "SELECT id, DATE '2026-01-05', 10, now() FROM establishments WHERE wco_code='ZZTEST1'"))
+            c.execute(text("INSERT INTO wco_generation_records (id, establishment_id, week_date, quantity_liters, created_at) "
+                           "SELECT -9002, id, DATE '2026-01-05', 10, now() FROM establishments WHERE wco_code='ZZTEST1'"))
             with pytest.raises(Exception):                 # duplicate establishment-week
-                c.execute(text("INSERT INTO wco_generation_records (establishment_id, week_date, quantity_liters, created_at) "
-                               "SELECT id, DATE '2026-01-05', 11, now() FROM establishments WHERE wco_code='ZZTEST1'"))
+                c.execute(text("INSERT INTO wco_generation_records (id, establishment_id, week_date, quantity_liters, created_at) "
+                               "SELECT -9003, id, DATE '2026-01-05', 11, now() FROM establishments WHERE wco_code='ZZTEST1'"))
             sp.rollback()
         finally:
             tx.rollback()

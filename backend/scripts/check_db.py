@@ -26,7 +26,7 @@ APP_TABLES = [
     "users", "establishments", "wco_generation_records", "wco_quality_tests", "audit_logs",
     "saved_routes", "forecast_runs", "forecast_results", "hotspot_scores", "candidate_sites",
     "road_network", "route_results", "simulation_runs", "optimization_results",
-    "model_training_jobs", "model_versions",
+    "model_training_jobs", "model_versions", "retraining_workers",
 ]
 
 
@@ -78,6 +78,8 @@ def main() -> int:
                 info(f"{t:24s} {c.execute(text(f'SELECT COUNT(*) FROM {t}')).scalar():>8,}")
             elif t in ("model_training_jobs", "model_versions"):
                 info(f"{t:24s} (missing — created by migration b7c8d9e0f1a2)")
+            elif t == "retraining_workers":
+                info(f"{t:24s} (missing — created by migration c9d0e1f2a3b4)")
             else:
                 bad(f"table {t} missing")
 
@@ -87,7 +89,10 @@ def main() -> int:
                 "SELECT relname, relrowsecurity FROM pg_class JOIN pg_namespace n ON n.oid = relnamespace "
                 "WHERE n.nspname = 'public' AND relkind = 'r'")).all()
             off = sorted(r[0] for r in rows if not r[1] and r[0] in APP_TABLES)
-            if off:
+            present = {r[0] for r in rows} & set(APP_TABLES)
+            if not present:
+                info("no application tables yet (run migrations)")
+            elif off:
                 bad(f"RLS disabled on: {', '.join(off)} (readable via Supabase REST with the anon key)")
             else:
                 ok("RLS enabled on all application tables")
