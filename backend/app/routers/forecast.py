@@ -1,85 +1,94 @@
-"""Forecasting endpoints — inference + in-backend LSTM training."""
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from sqlalchemy import select
+"""Forecasting endpoints — inference, manual training, and retraining status."""
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db, SessionLocal
+from app.core.database import get_db
 from app.core.security import get_current_user, require_role
 from app.models.establishment import Establishment
-from app.schemas.schemas import ForecastResponse, AggregateForecastPoint
-from app.services.forecasting import generate_forecast, get_training_status, train_lstm
+from app.schemas.schemas import AggregateForecastPoint, ForecastResponse
+from app.services.forecasting import (
+    InsufficientHistoryError, aggregate_forecast as _aggregate, generate_forecast,
+)
+from app.services.model_store import ModelIntegrityError
+from app.services.retraining import (
+    TrainingInProgressError, get_scheduler, get_training_status,
+)
+from app.services.training import FORECAST_HORIZON
+
+logger = logging.getLogger("wco.forecast")
 
 router = APIRouter(prefix="/forecast", tags=["forecast"])
 
+_NO_MODEL = "No trained model found. Train the LSTM first (Admin → Forecasting)."
+
 
 @router.get("/training-status", dependencies=[Depends(get_current_user)])
-def training_status():
-    """Current state of the LSTM training job."""
-    return get_training_status()
+def training_status(db: Session = Depends(get_db)):
+    """State of automatic/manual retraining and the active model's evaluation.
+
+    ``status`` is one of: idle | pending | training | completed | failed.
+    A failed job never replaces the active model.
+    """
+    return get_training_status(db)
 
 
-@router.post("/train")
-def trigger_training(
-    background_tasks: BackgroundTasks,
-    current_user=Depends(require_role("admin", "researcher")),
-):
-    """Start LSTM training in the background. Returns immediately."""
-    state = get_training_status()
-    if state["status"] == "training":
+@router.post("/train", status_code=202)
+def trigger_training(current_user=Depends(require_role("admin", "researcher"))):
+    """Start a retraining job now (manual trigger). Returns immediately.
+
+    Any pending automatic job is folded into this one.
+    """
+    try:
+        job_id = get_scheduler().request_manual_training(current_user.email, current_user.id)
+    except TrainingInProgressError:
         raise HTTPException(status_code=409, detail="Training already in progress.")
-    background_tasks.add_task(train_lstm, SessionLocal, current_user.email, current_user.id)
-    return {"status": "training_started"}
+    return {"status": "training_started", "job_id": job_id}
 
 
 @router.get("/aggregate", response_model=list[AggregateForecastPoint])
 def aggregate_forecast(
-    horizon_weeks: int = Query(13, le=52),
+    response: Response,
+    horizon_weeks: int = Query(FORECAST_HORIZON, ge=1, le=52),
     db: Session = Depends(get_db),
     _=Depends(get_current_user),
 ):
-    """Aggregate forecasted WCO supply across all active establishments."""
-    from app.models.establishment import Establishment
-    estabs = db.scalars(
-        select(Establishment).where(Establishment.is_active.is_(True))
-    ).all()
+    """Aggregate forecasted WCO supply across all active establishments.
 
-    agg: dict[str, float] = {}
-    cnt: dict[str, int]   = {}
-
-    for e in estabs:
-        try:
-            fc = generate_forecast(db, establishment_id=e.id, horizon_weeks=horizon_weeks)
-            for p in fc.points:
-                k = str(p.week_date)
-                agg[k] = agg.get(k, 0.0) + p.predicted_liters
-                cnt[k] = cnt.get(k, 0) + 1
-        except Exception:
-            pass
-
-    return [
-        {"week_date": k, "total_predicted_liters": round(agg[k], 1), "establishment_count": cnt[k]}
-        for k in sorted(agg.keys())
-    ]
+    Establishments without 12 consecutive recent weeks are skipped; the
+    counts are reported in the X-Forecast-Included / X-Forecast-Skipped headers.
+    """
+    try:
+        result = _aggregate(db, horizon_weeks=horizon_weeks)
+    except FileNotFoundError:
+        raise HTTPException(status_code=503, detail=_NO_MODEL)
+    except ModelIntegrityError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    response.headers["X-Forecast-Included"] = str(result["included"])
+    response.headers["X-Forecast-Skipped"] = str(len(result["skipped"]))
+    response.headers["X-Model-Version"] = result["model_version"]
+    if result["skipped"]:
+        logger.info("Aggregate forecast skipped %d establishment(s)", len(result["skipped"]))
+    return result["points"]
 
 
 @router.get("/{establishment_id}", response_model=ForecastResponse)
 def forecast_for_establishment(
     establishment_id: int,
-    horizon_weeks: int = 13,
+    horizon_weeks: int = Query(FORECAST_HORIZON, ge=1, le=52),
     db: Session = Depends(get_db),
     _=Depends(get_current_user),
 ):
     estab = db.get(Establishment, establishment_id)
     if not estab:
         raise HTTPException(status_code=404, detail="Establishment not found")
-
     try:
         return generate_forecast(db, establishment_id=establishment_id,
                                  horizon_weeks=horizon_weeks)
     except FileNotFoundError:
-        raise HTTPException(
-            status_code=503,
-            detail="No trained model found. Train the LSTM first (Admin → Forecasting).",
-        )
-    except ValueError as e:
+        raise HTTPException(status_code=503, detail=_NO_MODEL)
+    except ModelIntegrityError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except InsufficientHistoryError as e:
         raise HTTPException(status_code=422, detail=str(e))

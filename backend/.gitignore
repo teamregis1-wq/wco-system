@@ -5,3 +5,7 @@ __pycache__/
 #app/services/model_artifacts/*.pt
 #app/services/model_artifacts/*.npz
 .DS_Store
+
+# Local model cache written by retraining (the database holds the durable copy)
+app/services/model_artifacts/versions/
+.pytest_cache/

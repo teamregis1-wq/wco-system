@@ -7,6 +7,7 @@ from app.models.audit import AuditLog
 from app.models.user import User
 from app.models.establishment import Establishment
 from app.models.wco import WCOGenerationRecord, WCOQualityTest
+from app.models.ml import ModelTrainingJob, ModelVersion
 from app.models.analysis import (
     ForecastRun,
     ForecastResult,
@@ -25,6 +26,8 @@ __all__ = [
     "Establishment",
     "WCOGenerationRecord",
     "WCOQualityTest",
+    "ModelTrainingJob",
+    "ModelVersion",
     "ForecastRun",
     "ForecastResult",
     "HotspotScore",

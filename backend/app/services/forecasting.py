@@ -1,302 +1,179 @@
-"""Forecasting service — inference and in-backend LSTM training.
+"""Forecasting service — inference with the active LSTM model.
 
-The model definition here MUST match the training logic exactly
-(same SEQUENCE_LENGTH, HIDDEN_SIZE, NUM_LAYERS).
+Training lives in ``app.services.training`` (pure pipeline) and
+``app.services.retraining`` (jobs, scheduling, activation). The model
+definition, sequence length, and recursive forecasting function are shared
+with training, so inference is exactly what the backtest evaluated.
 
-Training runs in a FastAPI BackgroundTask so it never blocks the API.
-Status is tracked in a module-level dict (_training_state).
+Input window rule: the model reads the most recent SEQUENCE_LENGTH (12)
+weekly values of an establishment. Up to 2 consecutive missing weeks are
+linearly interpolated for the input (and reported as a warning); a longer
+gap, an irregular interval, or a duplicate week makes the input ill-defined,
+so the API declines to forecast (HTTP 422 with an explanation) rather than
+guess. Training never uses interpolated values.
 """
-import threading
-from datetime import datetime, timezone, timedelta
-from pathlib import Path
+from __future__ import annotations
+
+from collections import defaultdict
+from datetime import date, timedelta
 
 import numpy as np
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
+from app.models.establishment import Establishment
 from app.models.wco import WCOGenerationRecord
 from app.schemas.schemas import ForecastPoint, ForecastResponse
+from app.services.model_store import LoadedModel, get_active_model
+from app.services.retraining import get_training_status  # noqa: F401  (re-export)
+from app.services.training import FORECAST_HORIZON, SEQUENCE_LENGTH, recursive_forecast
 
-ARTIFACT_DIR   = Path(__file__).parent / "model_artifacts"
-WEIGHTS_PATH   = ARTIFACT_DIR / "lstm_wco.pt"
-SCALER_PATH    = ARTIFACT_DIR / "scaler.npz"
-
-SEQUENCE_LENGTH  = 12   # LSTM input window (weeks of lookback per inference step)
-MIN_HISTORY_WEEKS = 52  # Minimum WCO records required to run forecasting
-HIDDEN_SIZE      = 64
-NUM_LAYERS       = 2
-
-# ── Training state ─────────────────────────────────────────────────────────────
-
-_training_lock  = threading.Lock()
-_training_state: dict = {
-    "status":      "idle",   # idle | training | done | failed
-    "metrics":     None,
-    "error":       None,
-    "started_at":  None,
-    "finished_at": None,
-}
+# Backward-compatible names (the old module exposed these).
+MIN_HISTORY_WEEKS = max(SEQUENCE_LENGTH, settings.ml_min_history_weeks)
 
 
-def get_training_status() -> dict:
-    with _training_lock:
-        return dict(_training_state)
+class InsufficientHistoryError(ValueError):
+    pass
 
 
-def _set_state(**kwargs: object) -> None:
-    with _training_lock:
-        _training_state.update(kwargs)
+MAX_INTERPOLATED_GAP_WEEKS = 2   # inference only; training never uses filled values
 
 
-# ── Model definition (shared by training + inference) ─────────────────────────
+def trailing_window(rows: list[tuple[date, float]], min_weeks: int = MIN_HISTORY_WEEKS,
+                    warnings: list[str] | None = None):
+    """Return (last SEQUENCE_LENGTH weekly values, origin date) for inference.
 
-def _build_model(torch, nn):
-    class WCOLSTM(nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.lstm = nn.LSTM(1, HIDDEN_SIZE, NUM_LAYERS, batch_first=True)
-            self.fc   = nn.Linear(HIDDEN_SIZE, 1)
-
-        def forward(self, x):
-            out, _ = self.lstm(x)
-            return self.fc(out[:, -1, :])
-
-    return WCOLSTM()
-
-
-# ── In-backend training ────────────────────────────────────────────────────────
-
-def train_lstm(
-    db_factory,
-    user_email: str = "system",
-    user_id: int | None = None,
-) -> None:
-    """Full training run called from a BackgroundTask.
-    Creates its own DB session so the request session is safe to close.
+    Walks back from the latest record over exactly-weekly steps. A short gap
+    (at most MAX_INTERPOLATED_GAP_WEEKS missing weeks) is filled by linear
+    interpolation — for the forecast INPUT only — and reported in `warnings`.
+    A longer gap, an irregular interval, or a duplicate week ends the run.
+    Raises InsufficientHistoryError with a human-readable reason when the
+    usable run is shorter than `min_weeks`.
     """
-    _set_state(
-        status="training",
-        metrics=None,
-        error=None,
-        started_at=datetime.now(timezone.utc).isoformat(),
-        finished_at=None,
-    )
-
-    db: Session = db_factory()
-    try:
-        from app.core.audit import log_action
-        log_action(db, user_email, user_id, "create", "lstm_training",
-                   details="Training started")
-        db.commit()
-
-        import torch
-        from torch import nn
-        from torch.utils.data import DataLoader, TensorDataset
-        from itertools import groupby
-        from operator import attrgetter
-
-        # ── Load & group data ──────────────────────────────────────────────────
-        rows = list(db.scalars(
-            select(WCOGenerationRecord)
-            .order_by(WCOGenerationRecord.establishment_id,
-                      WCOGenerationRecord.week_date)
-        ).all())
-
-        if not rows:
-            raise ValueError("No WCO records found. Add data in Establishments first.")
-
-        all_vals = np.array([r.quantity_liters for r in rows], dtype=np.float32)
-        data_min, data_max = float(all_vals.min()), float(all_vals.max())
-        span = (data_max - data_min) or 1.0
-
-        X_list, y_list = [], []
-        rows.sort(key=attrgetter("establishment_id", "week_date"))
-        for _, grp in groupby(rows, key=attrgetter("establishment_id")):
-            series = np.array([r.quantity_liters for r in grp], dtype=np.float32)
-            if len(series) <= SEQUENCE_LENGTH:
-                continue
-            scaled = (series - data_min) / span
-            for i in range(len(scaled) - SEQUENCE_LENGTH):
-                X_list.append(scaled[i:i + SEQUENCE_LENGTH])
-                y_list.append(scaled[i + SEQUENCE_LENGTH])
-
-        if not X_list:
-            raise ValueError(
-                f"Each establishment needs > {SEQUENCE_LENGTH} weeks of data. "
-                "Add more WCO records first."
-            )
-
-        X = np.array(X_list, dtype=np.float32)[..., None]  # (N, seq, 1)
-        y = np.array(y_list, dtype=np.float32)[..., None]  # (N, 1)
-
-        n   = len(X)
-        idx = int(n * 0.8)
-        X_train, y_train = X[:idx], y[:idx]
-        X_val,   y_val   = X[idx:], y[idx:]
-
-        train_dl = DataLoader(TensorDataset(torch.tensor(X_train), torch.tensor(y_train)),
-                              batch_size=32, shuffle=True)
-        val_dl   = DataLoader(TensorDataset(torch.tensor(X_val),   torch.tensor(y_val)),
-                              batch_size=128)
-
-        # ── Model ─────────────────────────────────────────────────────────────
-        device    = torch.device("cpu")
-        model     = _build_model(torch, nn).to(device)
-        criterion = nn.MSELoss()
-        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-
-        # ── Training with early stopping ───────────────────────────────────────
-        EPOCHS, PATIENCE = 80, 8
-        best_val, patience_left = float("inf"), PATIENCE
-        best_state, epoch_run   = None, 0
-
-        for epoch in range(1, EPOCHS + 1):
-            epoch_run = epoch
-            model.train()
-            for xb, yb in train_dl:
-                xb, yb = xb.to(device), yb.to(device)
-                optimizer.zero_grad()
-                criterion(model(xb), yb).backward()
-                optimizer.step()
-
-            model.eval()
-            with torch.no_grad():
-                vloss = float(np.mean([
-                    criterion(model(xb.to(device)), yb.to(device)).item()
-                    for xb, yb in val_dl
-                ]))
-
-            if vloss < best_val - 1e-5:
-                best_val      = vloss
-                best_state    = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-                patience_left = PATIENCE
+    if not rows:
+        raise InsufficientHistoryError(
+            "This establishment has no WCO records yet. Add at least "
+            f"{min_weeks} consecutive weekly records to enable forecasting.")
+    filled: list[tuple[date, float]] = [rows[-1]]   # newest first
+    break_reason = None
+    interpolated: list[date] = []
+    i = len(rows) - 1
+    while i > 0 and len(filled) < max(min_weeks, SEQUENCE_LENGTH):
+        (d0, v0), (d1, v1) = rows[i - 1], rows[i]
+        delta = (d1 - d0).days
+        if delta == 7:
+            filled.append((d0, v0))
+        elif delta % 7 == 0 and 0 < delta // 7 - 1 <= MAX_INTERPOLATED_GAP_WEEKS:
+            k = delta // 7
+            for j in range(k - 1, 0, -1):            # missing weeks, newest first
+                filled.append((d0 + timedelta(weeks=j), v0 + (v1 - v0) * j / k))
+                interpolated.append(d0 + timedelta(weeks=j))
+            filled.append((d0, v0))
+        else:
+            if delta == 0:
+                break_reason = f"duplicate record for week {d1}"
+            elif delta % 7 == 0:
+                break_reason = f"{delta // 7 - 1} missing week(s) between {d0} and {d1}"
             else:
-                patience_left -= 1
-                if patience_left == 0:
-                    break
-
-        model.load_state_dict(best_state)
-
-        # ── Metrics ────────────────────────────────────────────────────────────
-        model.eval()
-        with torch.no_grad():
-            pred_sc = model(torch.tensor(X_val).to(device)).cpu().numpy().ravel()
-        true_sc = y_val.ravel()
-
-        pred_l = pred_sc * span + data_min
-        true_l = true_sc * span + data_min
-
-        mae  = float(np.mean(np.abs(pred_l - true_l)))
-        rmse = float(np.sqrt(np.mean((pred_l - true_l) ** 2)))
-        ss_r = float(np.sum((pred_l - true_l) ** 2))
-        ss_t = float(np.sum((true_l - true_l.mean()) ** 2))
-        r2   = float(1 - ss_r / ss_t) if ss_t > 0 else 0.0
-        mape = float(np.mean(np.abs((pred_l - true_l) / (np.abs(true_l) + 1e-8))) * 100)
-
-        # ── Save artifacts ─────────────────────────────────────────────────────
-        ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
-        torch.save(best_state, WEIGHTS_PATH)
-        np.savez(str(SCALER_PATH), min=data_min, max=data_max)
-
-        metrics = {
-            "mae":              round(mae,  3),
-            "rmse":             round(rmse, 3),
-            "r2":               round(r2,   4),
-            "mape":             round(mape, 2),
-            "training_samples": int(idx),
-            "val_samples":      int(n - idx),
-            "epochs_run":       epoch_run,
-        }
-        log_action(db, user_email, user_id, "update", "lstm_training",
-                   details=f"Done — MAE={metrics['mae']}L R²={metrics['r2']} MAPE={metrics['mape']}% ({epoch_run} epochs)")
-        db.commit()
-
-        _set_state(
-            status="done",
-            metrics=metrics,
-            error=None,
-            finished_at=datetime.now(timezone.utc).isoformat(),
-        )
-
-    except Exception as exc:
-        try:
-            from app.core.audit import log_action
-            log_action(db, user_email, user_id, "delete", "lstm_training",
-                       details=f"Failed — {exc}")
-            db.commit()
-        except Exception:
-            pass
-        _set_state(
-            status="failed",
-            metrics=None,
-            error=str(exc),
-            finished_at=datetime.now(timezone.utc).isoformat(),
-        )
-    finally:
-        db.close()
+                break_reason = f"irregular {delta}-day interval between {d0} and {d1}"
+            break
+        i -= 1
+    run = list(reversed(filled))
+    if len(run) < min_weeks:
+        msg = (f"Forecasting needs at least {min_weeks} consecutive weekly records; "
+               f"the most recent consecutive run has {len(run)} (ending {rows[-1][0]}).")
+        if break_reason:
+            msg += f" The run is broken by {break_reason}."
+        raise InsufficientHistoryError(msg)
+    window = run[-SEQUENCE_LENGTH:]
+    used = [d for d in interpolated if d >= window[0][0]]
+    if used and warnings is not None:
+        warnings.append(
+            f"{len(used)} missing week(s) in the 12-week input ({', '.join(map(str, sorted(used)))}) "
+            "were linearly interpolated for this forecast only.")
+    values = np.array([v for _, v in window], dtype=np.float64)
+    return values, rows[-1][0]
 
 
-# ── Inference ─────────────────────────────────────────────────────────────────
-
-def _load_model():
-    import torch
-    from torch import nn
-    if not WEIGHTS_PATH.exists():
-        raise FileNotFoundError(WEIGHTS_PATH)
-    model = _build_model(torch, nn)
-    model.load_state_dict(torch.load(WEIGHTS_PATH, map_location="cpu"))
-    model.eval()
-    return model, torch
+def _staleness_warning(origin: date) -> list[str]:
+    lag = (date.today() - origin).days
+    if lag > 14:
+        return [f"Latest record is from {origin} ({lag} days ago); the forecast starts after "
+                "that week, so some 'forecast' weeks may already be in the past."]
+    return []
 
 
-def _load_scaler():
-    if not SCALER_PATH.exists():
-        raise FileNotFoundError(SCALER_PATH)
-    data = np.load(str(SCALER_PATH))
-    return float(data["min"]), float(data["max"])
+def _points(lm: LoadedModel, origin: date, scaled_preds: np.ndarray) -> list[ForecastPoint]:
+    liters = np.maximum(scaled_preds * lm.span + lm.scaler_min, 0.0)
+    return [ForecastPoint(week_date=origin + timedelta(weeks=i), predicted_liters=round(float(v), 2))
+            for i, v in enumerate(liters, start=1)]
 
 
 def generate_forecast(
-    db: Session, *, establishment_id: int, horizon_weeks: int = 12
+    db: Session, *, establishment_id: int, horizon_weeks: int = FORECAST_HORIZON,
 ) -> ForecastResponse:
-    model, torch = _load_model()
-    data_min, data_max = _load_scaler()
-    span = (data_max - data_min) or 1.0
-
-    rows = list(db.scalars(
-        select(WCOGenerationRecord)
+    lm = get_active_model(db)
+    rows = [(r[0], float(r[1])) for r in db.execute(
+        select(WCOGenerationRecord.week_date, WCOGenerationRecord.quantity_liters)
         .where(WCOGenerationRecord.establishment_id == establishment_id)
         .order_by(WCOGenerationRecord.week_date)
-    ).all())
-
-    if len(rows) < MIN_HISTORY_WEEKS:
-        raise ValueError(
-            f"Need at least {MIN_HISTORY_WEEKS} weeks of history; got {len(rows)}."
-        )
-
-    last_date = rows[-1].week_date
-    history   = np.array([r.quantity_liters for r in rows], dtype=np.float32)
-    scaled    = (history - data_min) / span
-    window    = scaled[-SEQUENCE_LENGTH:].tolist()
-
-    preds: list[float] = []
-    with torch.no_grad():
-        for _ in range(horizon_weeks):
-            x    = torch.tensor(window[-SEQUENCE_LENGTH:], dtype=torch.float32).view(1, SEQUENCE_LENGTH, 1)
-            yhat = float(model(x).item())
-            preds.append(yhat)
-            window.append(yhat)
-
-    points = [
-        ForecastPoint(
-            week_date=last_date + timedelta(weeks=i),
-            predicted_liters=round(max(0.0, p * span + data_min), 2),
-        )
-        for i, p in enumerate(preds, start=1)
-    ]
-
+    ).all()]
+    warnings: list[str] = []
+    values, origin = trailing_window(rows, warnings=warnings)
+    window = ((values - lm.scaler_min) / lm.span)[None, :]
+    preds = recursive_forecast(lm.model, window, horizon_weeks)[0]
     return ForecastResponse(
         establishment_id=establishment_id,
-        model_version="lstm-v1",
-        points=points,
+        model_version=lm.version,
+        points=_points(lm, origin, preds),
+        forecast_origin=origin,
+        horizon_weeks=horizon_weeks,
+        trained_at=lm.trained_at,
+        warnings=warnings + _staleness_warning(origin),
     )
+
+
+def aggregate_forecast(db: Session, horizon_weeks: int = FORECAST_HORIZON) -> dict:
+    """Sum of per-establishment forecasts by calendar week (batched inference).
+
+    Returns {"points": [...], "included": n, "skipped": {id: reason}, "model_version": v}.
+    """
+    lm = get_active_model(db)
+    rows = db.execute(
+        select(WCOGenerationRecord.establishment_id, WCOGenerationRecord.week_date,
+               WCOGenerationRecord.quantity_liters)
+        .join(Establishment, Establishment.id == WCOGenerationRecord.establishment_id)
+        .where(Establishment.is_active.is_(True))
+        .order_by(WCOGenerationRecord.establishment_id, WCOGenerationRecord.week_date)
+    ).all()
+    series: dict[int, list[tuple[date, float]]] = defaultdict(list)
+    for eid, d, q in rows:
+        series[eid].append((d, float(q)))
+
+    ids, windows, origins, skipped = [], [], [], {}
+    for eid, s in series.items():
+        try:
+            values, origin = trailing_window(s)
+        except InsufficientHistoryError as e:
+            skipped[eid] = str(e)
+            continue
+        ids.append(eid)
+        windows.append((values - lm.scaler_min) / lm.span)
+        origins.append(origin)
+
+    totals: dict[date, float] = defaultdict(float)
+    counts: dict[date, int] = defaultdict(int)
+    if windows:
+        preds = recursive_forecast(lm.model, np.asarray(windows), horizon_weeks)
+        for origin, row in zip(origins, preds):
+            for p in _points(lm, origin, row):
+                totals[p.week_date] += p.predicted_liters
+                counts[p.week_date] += 1
+    return {
+        "points": [{"week_date": str(d), "total_predicted_liters": round(totals[d], 1),
+                    "establishment_count": counts[d]} for d in sorted(totals)],
+        "included": len(ids),
+        "skipped": skipped,
+        "model_version": lm.version,
+    }
