@@ -20,8 +20,8 @@ const FEATURES = [
   },
   {
     icon: "route",
-    title: "Route Optimization",
-    text: "Collection routes follow real roads via OpenStreetMap routing, ordered to minimise total travel distance from your depot.",
+    title: "Route Planning",
+    text: "Collection routes follow real roads via OpenStreetMap routing; stops are ordered by a nearest-neighbour heuristic that keeps travel short (not a guaranteed optimum).",
   },
   {
     icon: "building",
@@ -141,7 +141,7 @@ function LiveTicker() {
 const STEPS = [
   { n: "01", title: "Record", text: "Field teams log weekly WCO volumes per establishment." },
   { n: "02", title: "Analyze", text: "The system scores hotspots and forecasts future generation." },
-  { n: "03", title: "Collect", text: "Optimized routes guide crews to the highest-yield stops." },
+  { n: "03", title: "Collect", text: "Heuristic route planning orders stops along the road network." },
 ];
 
 export default function LandingPage() {

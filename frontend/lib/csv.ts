@@ -169,6 +169,19 @@ export function normalizeDate(raw: string): { value?: string; error?: string } {
   return { error: `"${s}" is not a recognised date — use YYYY-MM-DD` };
 }
 
+// ── Provenance ────────────────────────────────────────────────────────────────
+
+export const DATA_SOURCES = ["synthetic", "observed", "unspecified"] as const;
+export type DataSource = typeof DATA_SOURCES[number];
+
+/** Optional `data_source` column. Empty → undefined (the server applies its default). */
+function parseDataSource(raw: string): { value?: DataSource; error?: string } {
+  const v = raw.trim().toLowerCase();
+  if (!v) return {};
+  if ((DATA_SOURCES as readonly string[]).includes(v)) return { value: v as DataSource };
+  return { error: `data_source "${raw}" must be one of ${DATA_SOURCES.join(", ")}` };
+}
+
 // ── Establishments ────────────────────────────────────────────────────────────
 
 export const ESTABLISHMENT_TYPES = ["restaurant", "fast_food", "food_manufacturer"] as const;
@@ -203,7 +216,8 @@ export interface EstablishmentImportRow {
   business_hours: string | null;
   seating_capacity: number | null;
   contact_info: string | null;
-  consent_given: true;
+  data_source?: DataSource;
+  // consent_given is intentionally absent: a CSV row is not evidence of consent.
 }
 
 export function validateEstablishments(parsed: ParsedCSV): ValidationResult<EstablishmentImportRow> {
@@ -255,6 +269,9 @@ export function validateEstablishments(parsed: ParsedCSV): ValidationResult<Esta
       seating_capacity = Math.round(n);
     }
 
+    const src = parseDataSource(pick(row, "data_source", "source"));
+    if (src.error) return fail(src.error);
+
     seenCodes.add(key);
     valid.push({
       wco_code, name, type, latitude, longitude,
@@ -263,7 +280,7 @@ export function validateEstablishments(parsed: ParsedCSV): ValidationResult<Esta
       business_hours: pick(row, "business_hours", "hours", "operating_hours") || null,
       seating_capacity,
       contact_info: pick(row, "contact_info", "contact", "phone", "contact_number") || null,
-      consent_given: true,
+      ...(src.value ? { data_source: src.value } : {}),
     });
   });
 
@@ -281,14 +298,15 @@ export interface WcoImportRow {
   week_end_date: string | null;
   quantity_liters: number;
   notes: string | null;
+  data_source?: DataSource;
 }
 
 export function validateWcoRecords(parsed: ParsedCSV, establishmentId: number): ValidationResult<WcoImportRow> {
   const valid: WcoImportRow[] = [];
   const errors: RowError[] = [];
   const seenWeeks = new Set<string>();
-  // Allow a little slack for a week that has just started.
-  const maxDate = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
+  // Same rule as the API: no future weeks (1 day of slack for time zones).
+  const maxDate = new Date(Date.now() + 1 * 86400000).toISOString().slice(0, 10);
 
   parsed.rows.forEach((row, i) => {
     const line = parsed.lineNumbers[i];
@@ -321,6 +339,9 @@ export function validateWcoRecords(parsed: ParsedCSV, establishmentId: number): 
       week_end_date = e.value!;
     }
 
+    const src = parseDataSource(pick(row, "data_source", "source"));
+    if (src.error) return fail(src.error);
+
     seenWeeks.add(week_date);
     valid.push({
       establishment_id: establishmentId,
@@ -328,6 +349,7 @@ export function validateWcoRecords(parsed: ParsedCSV, establishmentId: number): 
       week_end_date,
       quantity_liters: qty,
       notes: pick(row, "notes", "remarks", "comment") || null,
+      ...(src.value ? { data_source: src.value } : {}),
     });
   });
 
@@ -386,7 +408,7 @@ export function downloadEstablishmentTemplate() {
 
 export function downloadWcoTemplate() {
   downloadCSV([
-    { week_date: "2026-01-05", week_end_date: "2026-01-11", quantity_liters: 120.5, notes: "" },
-    { week_date: "2026-01-12", week_end_date: "2026-01-18", quantity_liters: 98,    notes: "holiday week" },
+    { week_date: "2026-01-05", week_end_date: "2026-01-11", quantity_liters: 120.5, notes: "", data_source: "synthetic" },
+    { week_date: "2026-01-12", week_end_date: "2026-01-18", quantity_liters: 98,    notes: "holiday week", data_source: "synthetic" },
   ], "wco_records_template.csv");
 }

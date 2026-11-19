@@ -48,10 +48,11 @@ interface WCOSummary {
   current_month: number;
   current_year: number;
   last_updated: string | null;
+  data_source_counts?: Record<string, number>;
 }
 interface TrainingStatus {
   status: string;
-  metrics: { mae: number; rmse: number; r2: number; mape: number } | null;
+  metrics: { mae: number; rmse: number; r2: number; mape: number; test_samples?: number } | null;
   model_version: string | null;
   trained_at: string | null;
 }
@@ -59,6 +60,24 @@ interface AggregateForecastPoint {
   week_date: string;
   total_predicted_liters: number;
   establishment_count: number;
+}
+
+/** Make the provenance of the displayed data explicit (e.g. synthetic demo data). */
+function DataSourceNotice({ counts }: { counts?: Record<string, number> }) {
+  if (!counts) return null;
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
+  const synthetic = counts.synthetic ?? 0;
+  const unspecified = counts.unspecified ?? 0;
+  if (!total || (!synthetic && !unspecified)) return null;
+  const pct = (n: number) => Math.round((n / total) * 100);
+  const text = synthetic
+    ? `${pct(synthetic)}% of WCO records are SYNTHETIC (generated for demonstration) — not measured quantities.`
+    : `${pct(unspecified)}% of WCO records have no recorded data source.`;
+  return (
+    <div style={{ marginTop: 8, display: "inline-block", fontSize: 11.5, fontWeight: 600, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "4px 10px" }}>
+      {text}
+    </div>
+  );
 }
 
 function zColor(z: number) {
@@ -189,6 +208,7 @@ function DashboardContent() {
           <p style={{ fontSize: 13, color: "#6b7280", margin: 0 }}>
             Batangas City · Live summary from GIS hotspot analysis &amp; LSTM forecasting
           </p>
+          <DataSourceNotice counts={wcoSummary?.data_source_counts} />
         </div>
         <button
           onClick={exportPDF}
@@ -246,8 +266,13 @@ function DashboardContent() {
         <div style={{ background: "white", borderRadius: 14, padding: "16px 20px", boxShadow: "0 1px 3px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.06)" }}>
           <div style={{ fontSize: 10, fontWeight: 800, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 12 }}>
             LSTM Model Performance
-            {trainStatus?.model_version && <span style={{ marginLeft: 6, fontWeight: 500, color: "#cbd5e1" }}>v{trainStatus.model_version}</span>}
+            {trainStatus?.model_version && <span style={{ marginLeft: 6, fontWeight: 500, color: "#cbd5e1" }}>{trainStatus.model_version}</span>}
           </div>
+          {trainStatus?.metrics && (
+            <div style={{ fontSize: 10, color: "#94a3b8", marginTop: -8, marginBottom: 10 }}>
+              1-week-ahead on held-out test weeks · liters per establishment-week
+            </div>
+          )}
           {trainStatus?.metrics ? (
             <div className="pdf-g3" style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10 }}>
               {[
@@ -267,9 +292,11 @@ function DashboardContent() {
             </div>
           ) : (
             <div style={{ color: "#94a3b8", fontSize: 12 }}>
-              {trainStatus?.status === "not_trained" || !trainStatus
+              {!trainStatus || (!trainStatus.model_version && trainStatus.status === "idle")
                 ? "No trained model yet — go to Admin → Forecasting."
-                : `Status: ${trainStatus?.status ?? "unknown"}`}
+                : trainStatus.model_version
+                  ? `Active model ${trainStatus.model_version} has no held-out evaluation on record — retrain in Admin to compute it.`
+                  : `Status: ${trainStatus.status}`}
             </div>
           )}
         </div>

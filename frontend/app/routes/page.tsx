@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import Navbar from "@/components/Navbar";
 import { getToken } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
 
 const LocationPicker = dynamic(() => import("@/components/LocationPicker"), { ssr: false });
 const RouteMap = dynamic(() => import("@/components/RouteMapView"), { ssr: false });
@@ -69,6 +70,9 @@ interface RouteResult {
   algorithm: string;
   computation_time_ms: number;
   geometry?: [number, number][] | null;
+  distance_basis?: "road" | "straight_line" | "mixed";
+  is_heuristic?: boolean;
+  warnings?: string[];
 }
 
 interface SavedRoute {
@@ -126,6 +130,9 @@ function RoutesContent() {
 
   const [history, setHistory] = useState<SavedRoute[]>([]);
   const [loadedRouteId, setLoadedRouteId] = useState<number | null>(null);
+  // Saving/deleting history is a write: researchers and admins only (viewers are read-only).
+  const { can } = useAuth();
+  const canEdit = can("edit");
 
   useEffect(() => {
     Promise.all([
@@ -215,6 +222,7 @@ function RoutesContent() {
       setLoadedRouteId(null);
 
       // Auto-save into route history (non-blocking; history is best-effort)
+      if (!canEdit) return;
       const stamp = new Date().toLocaleString(undefined, {
         month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
       });
@@ -516,6 +524,7 @@ function RoutesContent() {
                       >
                         {active ? "Loaded" : "Load"}
                       </button>
+                      {canEdit && (
                       <button
                         onClick={() => deleteSavedRoute(r.id)}
                         title="Delete from history"
@@ -527,6 +536,7 @@ function RoutesContent() {
                       >
                         ✕
                       </button>
+                      )}
                     </div>
                   );
                 })}
@@ -582,7 +592,7 @@ function RoutesContent() {
           {!result && !p2pResult && (
             <div style={{ background: "white", borderRadius: 16, padding: 40, textAlign: "center", boxShadow: "0 1px 3px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.06)", color: "#94a3b8", fontSize: 14 }}>
               {mode === "tsp"
-                ? "Select establishments and click Compute Route to see the optimised collection order."
+                ? "Select establishments and click Compute Route to see a planned collection order (nearest-neighbour heuristic)."
                 : "Select a start and end establishment to get the road distance between them."}
             </div>
           )}
@@ -656,7 +666,15 @@ function RoutesContent() {
                   ? <>&nbsp;·&nbsp;Computed in <span style={{ color: "#374151", fontWeight: 600 }}>{result.computation_time_ms} ms</span></>
                   : <>&nbsp;·&nbsp;<span style={{ color: "#374151", fontWeight: 600 }}>Loaded from history</span></>
                 }
+                <div style={{ marginTop: 2 }}>
+                  Stop order is a nearest-neighbour heuristic: quick and usually reasonable, but not guaranteed to be the shortest tour.
+                </div>
               </div>
+              {result.warnings && result.warnings.length > 0 && (
+                <div style={{ fontSize: 12, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: "8px 12px" }}>
+                  {result.warnings.map(w => <div key={w}>⚠ {w}</div>)}
+                </div>
+              )}
 
               <div className="route-map-wrapper">
                 <RouteMap
@@ -671,7 +689,7 @@ function RoutesContent() {
               {/* Route stops table */}
               <div style={{ background: "white", borderRadius: 16, overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.06)" }}>
                 <div style={{ padding: "16px 20px", borderBottom: "1px solid #f1f5f9", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div style={{ fontSize: 12, fontWeight: 800, color: "#1a202c", textTransform: "uppercase", letterSpacing: "0.06em" }}>Optimised Stop Order</div>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: "#1a202c", textTransform: "uppercase", letterSpacing: "0.06em" }}>Planned Stop Order</div>
                   <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                     <span style={{ fontSize: 11, color: "#94a3b8" }}>Depot: {result.depot_name}</span>
                     <button

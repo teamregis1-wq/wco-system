@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback } from "react";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import Navbar from "@/components/Navbar";
 import PageShell, { card as cardStyle, primaryBtn as primaryBtnStyle, ghostBtn as ghostBtnStyle, input as inputStyle, label as labelStyle } from "@/components/PageShell";
@@ -111,7 +111,8 @@ function AddUserModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
     setError(null);
     setBusy(true);
     try {
-      await apiFetch("/auth/register", {
+      // Admin-only endpoint: public /auth/register can only create viewers.
+      await apiFetch("/auth/users", {
         method: "POST",
         body: JSON.stringify({ email, full_name: name, password, role }),
       });
@@ -169,111 +170,246 @@ function AddUserModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
 
 // ── LSTM Training Panel ───────────────────────────────────────────────────────
 
+type Metric = { n: number; mae: number | null; rmse: number | null; r2: number | null; mape: number | null };
+
+interface Evaluation {
+  mae: number; rmse: number; r2: number; mape: number;
+  training_samples: number; val_samples: number; test_samples?: number; epochs_run: number;
+  one_step?: { model: Metric; naive_last_week: Metric; seasonal_naive_13: Metric; moving_average_12: Metric };
+  multi_step?: {
+    horizon_weeks: number; origins: number; forecasts: number;
+    model: Metric; naive_last_week: Metric; seasonal_naive_13: Metric; moving_average_12: Metric;
+    aggregate_city_total?: { model: Metric; naive_last_week: Metric };
+  };
+}
+
+interface Job {
+  id: number; status: string; trigger: string; reason: string | null; change_count: number;
+  requested_by: string | null; requested_at: string | null; last_change_at: string | null;
+  started_at: string | null; finished_at: string | null; model_version: string | null;
+  activated: boolean; dataset_records: number | null; dataset_establishments: number | null;
+  error: string | null;
+}
+
 interface TrainingStatus {
-  status: "idle" | "training" | "done" | "failed";
-  metrics: { mae: number; rmse: number; r2: number; mape: number; training_samples: number; val_samples: number; epochs_run: number } | null;
+  status: "idle" | "pending" | "training" | "completed" | "failed";
+  metrics: Evaluation | null;
   error: string | null;
   started_at: string | null;
   finished_at: string | null;
+  model_version: string | null;
+  trained_at: string | null;
+  active_model: { version: string; source: string; trained_at: string | null; data_cutoff_date?: string | null; note?: string } | null;
+  current_job: Job | null;
+  pending_job: Job | null;
+  last_finished_job: Job | null;
+  recent_jobs: Job[];
+  auto_retraining: { enabled: boolean; debounce_seconds: number; mode: string; scheduler: string };
+}
+
+const fmtTime = (iso: string | null | undefined) =>
+  iso ? new Date(iso).toLocaleString("en-PH", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—";
+
+const STATUS_STYLE: Record<string, { bg: string; border: string; color: string; label: string }> = {
+  pending:   { bg: "#eff6ff", border: "#bfdbfe", color: "#1d4ed8", label: "Retraining scheduled" },
+  training:  { bg: "#fffbeb", border: "#fde68a", color: "#92400e", label: "Training in progress…" },
+  completed: { bg: "#f0fdf4", border: "#bbf7d0", color: "#065f46", label: "Training complete" },
+  failed:    { bg: "#fef2f2", border: "#fca5a5", color: "#dc2626", label: "Training failed" },
+};
+
+function MetricRow({ label, m, highlight }: { label: string; m?: Metric; highlight?: boolean }) {
+  if (!m) return null;
+  const cell = (v: number | null, unit = "") => (v == null ? "—" : `${v}${unit}`);
+  return (
+    <tr style={{ fontWeight: highlight ? 800 : 500, color: highlight ? "#0f6e56" : "#475569" }}>
+      <td style={{ padding: "4px 8px 4px 0" }}>{label}</td>
+      <td style={{ padding: "4px 8px", textAlign: "right" }}>{cell(m.mae, " L")}</td>
+      <td style={{ padding: "4px 8px", textAlign: "right" }}>{cell(m.rmse, " L")}</td>
+      <td style={{ padding: "4px 8px", textAlign: "right" }}>{m.r2 == null ? "—" : m.r2.toFixed(3)}</td>
+      <td style={{ padding: "4px 0 4px 8px", textAlign: "right" }}>{cell(m.mape, "%")}</td>
+    </tr>
+  );
+}
+
+function MetricTable({ title, note, rows }: { title: string; note: string; rows: [string, Metric | undefined, boolean?][] }) {
+  return (
+    <div style={{ background: "#f8fafc", borderRadius: 10, padding: "10px 14px", border: "1px solid #e2e8f0" }}>
+      <div style={{ fontSize: 11, fontWeight: 800, color: "#1a202c", marginBottom: 2 }}>{title}</div>
+      <div style={{ fontSize: 10.5, color: "#94a3b8", marginBottom: 6 }}>{note}</div>
+      <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse", fontVariantNumeric: "tabular-nums" }}>
+        <thead>
+          <tr style={{ fontSize: 10, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+            <th style={{ textAlign: "left", fontWeight: 700 }}>Method</th>
+            <th style={{ textAlign: "right", fontWeight: 700 }}>MAE</th>
+            <th style={{ textAlign: "right", fontWeight: 700 }}>RMSE</th>
+            <th style={{ textAlign: "right", fontWeight: 700 }}>R²</th>
+            <th style={{ textAlign: "right", fontWeight: 700 }}>MAPE</th>
+          </tr>
+        </thead>
+        <tbody>{rows.map(([label, m, hi]) => <MetricRow key={label} label={label} m={m} highlight={hi} />)}</tbody>
+      </table>
+    </div>
+  );
 }
 
 function LSTMTrainingPanel() {
   const [state,    setState]    = useState<TrainingStatus | null>(null);
   const [starting, setStarting] = useState(false);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [now,      setNow]      = useState(Date.now());
 
   const fetchStatus = useCallback(async () => {
-    try {
-      const s = await apiFetch<TrainingStatus>("/forecast/training-status");
-      setState(s);
-      if (s.status !== "training" && pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-    } catch { /* silent */ }
+    try { setState(await apiFetch<TrainingStatus>("/forecast/training-status")); }
+    catch { /* keep last known state */ }
   }, []);
 
-  useEffect(() => { fetchStatus(); }, [fetchStatus]);
+  // Poll quickly while a job is pending/training, slowly otherwise, so automatic
+  // retraining triggered from other pages (or other users) shows up here too.
+  const active = state?.status === "pending" || state?.status === "training";
+  useEffect(() => {
+    fetchStatus();
+    const id = setInterval(fetchStatus, active ? 2000 : 10000);
+    return () => clearInterval(id);
+  }, [fetchStatus, active]);
+  useEffect(() => {
+    if (!active) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [active]);
 
   async function startTraining() {
     setStarting(true);
     try {
       await apiFetch("/forecast/train", { method: "POST" });
-      toast("LSTM training started.", "info");
+      toast("Retraining started.", "info");
       await fetchStatus();
-      pollRef.current = setInterval(fetchStatus, 3000);
     } catch (e) { toast(String(e).replace("Error: ", ""), "error"); }
     finally { setStarting(false); }
   }
 
-  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
-
   const s = state;
-  const isTraining = s?.status === "training";
+  const isBusy = s?.status === "training";
+  const ev = s?.metrics ?? null;
+  const st = s ? STATUS_STYLE[s.status] : undefined;
+  const pendingIn = s?.pending_job?.last_change_at && s.auto_retraining
+    ? Math.max(0, Math.ceil(s.auto_retraining.debounce_seconds - (now - new Date(s.pending_job.last_change_at).getTime()) / 1000))
+    : null;
 
   return (
     <div style={cardStyle}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
         <div>
           <div style={{ fontSize: 14, fontWeight: 800, color: "#1a202c" }}>LSTM Forecast Model</div>
-          <div style={{ fontSize: 12, color: "#a0aec0" }}>Trains on all WCO records in the database · runs on CPU (~30–90 sec)</div>
+          <div style={{ fontSize: 12, color: "#a0aec0" }}>
+            {s?.auto_retraining?.enabled
+              ? `Automatic batch retraining is ON — data changes are coalesced for ${s.auto_retraining.debounce_seconds}s, then the model is retrained from scratch (not online learning).`
+              : "Automatic retraining is OFF — use Retrain to update the model."}
+          </div>
         </div>
         <button
           onClick={startTraining}
-          disabled={starting || isTraining}
-          style={{ ...primaryBtnStyle, opacity: (starting || isTraining) ? 0.65 : 1, display: "flex", alignItems: "center", gap: 8 }}
+          disabled={starting || isBusy}
+          style={{ ...primaryBtnStyle, opacity: (starting || isBusy) ? 0.65 : 1, display: "flex", alignItems: "center", gap: 8 }}
         >
-          {isTraining && (
+          {isBusy && (
             <span style={{ width: 14, height: 14, border: "2px solid rgba(255,255,255,0.4)", borderTopColor: "white", borderRadius: "50%", animation: "spin 0.8s linear infinite", display: "inline-block" }} />
           )}
-          {isTraining ? "Training…" : starting ? "Starting…" : "Retrain LSTM"}
+          {isBusy ? "Training…" : starting ? "Starting…" : "Retrain now"}
         </button>
       </div>
 
       {/* Status strip */}
-      {s && s.status !== "idle" && (
+      {s && st && (
         <div style={{
-          padding: "10px 14px", borderRadius: 10, marginBottom: 14,
-          background: s.status === "done" ? "#f0fdf4" : s.status === "failed" ? "#fef2f2" : "#fffbeb",
-          border: `1px solid ${s.status === "done" ? "#bbf7d0" : s.status === "failed" ? "#fca5a5" : "#fde68a"}`,
-          fontSize: 12, color: s.status === "done" ? "#065f46" : s.status === "failed" ? "#dc2626" : "#92400e",
-          display: "flex", alignItems: "center", gap: 8,
+          padding: "10px 14px", borderRadius: 10, marginBottom: 12,
+          background: st.bg, border: `1px solid ${st.border}`, fontSize: 12, color: st.color,
+          display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
         }}>
-          <span style={{ fontWeight: 700 }}>
-            {s.status === "training" ? "Training in progress…" : s.status === "done" ? "Training complete" : "Training failed"}
-          </span>
-          {s.error && <span>— {s.error}</span>}
-          {s.finished_at && (
-            <span style={{ marginLeft: "auto", color: "#94a3b8" }}>
-              {new Date(s.finished_at).toLocaleString("en-PH", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+          <span style={{ fontWeight: 700 }}>{st.label}</span>
+          {s.status === "pending" && s.pending_job && (
+            <span>
+              — {s.pending_job.change_count} change{s.pending_job.change_count !== 1 ? "s" : ""} ({s.pending_job.reason})
+              {s.pending_job.trigger === "manual" ? ", starting now" : pendingIn != null ? `, starts in ~${pendingIn}s unless more changes arrive` : ""}
             </span>
+          )}
+          {s.status === "training" && s.current_job && <span>— job #{s.current_job.id} started {fmtTime(s.current_job.started_at)}</span>}
+          {s.status === "completed" && s.last_finished_job && <span>— {s.last_finished_job.model_version} activated</span>}
+          {s.status === "failed" && (
+            <span>— {s.error}{s.model_version ? ` · previous model ${s.model_version} is still active` : ""}</span>
+          )}
+          {s.finished_at && !active && <span style={{ marginLeft: "auto", color: "#94a3b8" }}>{fmtTime(s.finished_at)}</span>}
+        </div>
+      )}
+
+      {/* Active model */}
+      {s?.active_model ? (
+        <div style={{ fontSize: 12, color: "#475569", marginBottom: 12, lineHeight: 1.6 }}>
+          <strong>Active model:</strong> {s.active_model.version}
+          {s.active_model.trained_at && <> · trained {fmtTime(s.active_model.trained_at)}</>}
+          {s.active_model.data_cutoff_date && <> · data through {s.active_model.data_cutoff_date}</>}
+          {s.active_model.note && <div style={{ color: "#b45309" }}>{s.active_model.note}</div>}
+        </div>
+      ) : s && (
+        <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 12 }}>No trained model yet. Click &quot;Retrain now&quot;.</div>
+      )}
+
+      {/* Evaluation */}
+      {ev && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 10, marginBottom: 12 }}>
+          <MetricTable
+            title="1-week-ahead, held-out test weeks"
+            note={`${ev.test_samples ?? "?"} establishment-weeks never seen in training · errors in liters per establishment-week`}
+            rows={[
+              ["LSTM", ev.one_step?.model ?? { n: 0, mae: ev.mae, rmse: ev.rmse, r2: ev.r2, mape: ev.mape }, true],
+              ["Naive (last week)", ev.one_step?.naive_last_week],
+              ["Seasonal naive (t−13)", ev.one_step?.seasonal_naive_13],
+              ["12-week moving average", ev.one_step?.moving_average_12],
+            ]}
+          />
+          {ev.multi_step?.model && (
+            <MetricTable
+              title={`${ev.multi_step.horizon_weeks}-week recursive backtest (rolling origin)`}
+              note={`${ev.multi_step.origins} forecast origins × ${ev.multi_step.forecasts / Math.max(1, ev.multi_step.origins)} establishments · all target weeks held out`}
+              rows={[
+                ["LSTM", ev.multi_step.model, true],
+                ["Naive (last week)", ev.multi_step.naive_last_week],
+                ["Seasonal naive (t−13)", ev.multi_step.seasonal_naive_13],
+                ["12-week moving average", ev.multi_step.moving_average_12],
+              ]}
+            />
           )}
         </div>
       )}
-
-      {/* Metrics */}
-      {s?.metrics && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10 }}>
-          {[
-            { label: "MAE",    value: `${s.metrics.mae} L`,   sub: "Mean Abs Error" },
-            { label: "RMSE",   value: `${s.metrics.rmse} L`,  sub: "Root Mean Sq. Error" },
-            { label: "R²",     value: s.metrics.r2.toFixed(4), sub: "Coefficient of determination" },
-            { label: "MAPE",   value: `${s.metrics.mape}%`,   sub: "Mean Abs % Error" },
-            { label: "Epochs", value: s.metrics.epochs_run,   sub: "Training epochs run" },
-            { label: "Samples",value: `${s.metrics.training_samples} / ${s.metrics.val_samples}`, sub: "Train / Val" },
-          ].map(({ label, value, sub }) => (
-            <div key={label} style={{ background: "#f8fafc", borderRadius: 10, padding: "10px 14px", border: "1px solid #e2e8f0" }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>{label}</div>
-              <div style={{ fontSize: 18, fontWeight: 900, color: "#0f6e56", fontVariantNumeric: "tabular-nums" }}>{value}</div>
-              <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>{sub}</div>
-            </div>
-          ))}
+      {ev && (
+        <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 12 }}>
+          Train / validation / test windows: {ev.training_samples} / {ev.val_samples} / {ev.test_samples ?? "—"} · {ev.epochs_run} epochs (early stopping).
+          Metrics describe performance on the current dataset; with synthetic data they do not establish real-world accuracy.
         </div>
       )}
 
-      {(!s || s.status === "idle") && !s?.metrics && (
-        <div style={{ fontSize: 12, color: "#94a3b8" }}>
-          No training run yet. Click "Retrain LSTM" to train on current WCO data.
+      {/* Recent jobs */}
+      {s && s.recent_jobs.length > 0 && (
+        <div>
+          <div style={{ fontSize: 10, fontWeight: 800, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 6 }}>Recent retraining jobs</div>
+          <table style={{ width: "100%", fontSize: 11.5, borderCollapse: "collapse" }}>
+            <tbody>
+              {s.recent_jobs.map(j => (
+                <tr key={j.id} style={{ borderTop: "1px solid #f1f5f9", color: "#475569" }}>
+                  <td style={{ padding: "5px 6px 5px 0", fontWeight: 700 }}>#{j.id}</td>
+                  <td style={{ padding: "5px 6px" }}>
+                    <span style={{ fontWeight: 700, color: STATUS_STYLE[j.status]?.color ?? "#64748b" }}>{j.status}</span>
+                  </td>
+                  <td style={{ padding: "5px 6px" }}>{j.trigger}{j.change_count > 1 ? ` · ${j.change_count} changes` : ""}</td>
+                  <td style={{ padding: "5px 6px", color: "#94a3b8" }}>{j.reason}</td>
+                  <td style={{ padding: "5px 6px" }}>{fmtTime(j.finished_at ?? j.started_at ?? j.requested_at)}</td>
+                  <td style={{ padding: "5px 0 5px 6px", color: "#94a3b8", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                      title={j.error ?? j.model_version ?? ""}>
+                    {j.model_version ?? (j.error ? j.error.slice(0, 60) : "")}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </div>

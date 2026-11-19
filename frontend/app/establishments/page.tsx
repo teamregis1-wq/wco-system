@@ -10,6 +10,7 @@ import { getToken } from "@/lib/api";
 import ForecastChart from "@/components/ForecastChart";
 import type { ForecastPoint } from "@/lib/api";
 import { toast, Toaster } from "@/components/Toast";
+import RetrainStatusBadge from "@/components/RetrainStatusBadge";
 import {
   parseCSV, validateEstablishments, validateWcoRecords,
   downloadCSV, downloadEstablishmentTemplate, downloadWcoTemplate,
@@ -70,6 +71,7 @@ interface WCORecord {
   week_end_date: string | null;
   quantity_liters: number;
   notes: string | null;
+  data_source?: string;
   created_at: string;
 }
 
@@ -260,7 +262,8 @@ function EstablishmentModal({
       const body: Record<string, unknown> = {
         name: form.name, type: form.type,
         latitude: parseFloat(form.latitude), longitude: parseFloat(form.longitude),
-        consent_given: true,
+        // consent_given is deliberately not sent: the form does not collect it,
+        // so it must not be asserted (new records default to "not recorded").
       };
       if (!editing) body.wco_code = form.wco_code;
       if (form.barangay) body.barangay = form.barangay;
@@ -385,6 +388,9 @@ function WCORecordsModal({
   const [completeness, setCompleteness] = useState<WCOCompleteness | null>(null);
   const [monthlyTotals,setMonthlyTotals]= useState<MonthlyTotal[]>([]);
   const wcoFileRef = useRef<HTMLInputElement>(null);
+  // Bumped after every successful data change → the badge shows retraining progress.
+  const [retrainKey, setRetrainKey] = useState(0);
+  const dataChanged = () => setRetrainKey(k => k + 1);
 
   // Add-record form state
   const [weekDate,    setWeekDate]    = useState("");
@@ -412,6 +418,23 @@ function WCORecordsModal({
 
   useEffect(() => { loadRecords(); }, [loadRecords]);
 
+  // Suggest the next week in this establishment's series (same weekday as its
+  // existing records). A date that is not exactly 7 days after the previous one
+  // breaks the weekly series used for forecasting.
+  const latestWeek = records.reduce<string | null>((m, r) => (m === null || r.week_date > m ? r.week_date : m), null);
+  const nextWeek = (() => {
+    if (!latestWeek) return null;
+    const d = new Date(latestWeek + "T00:00:00");
+    d.setDate(d.getDate() + 7);
+    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const today = new Date().toISOString().slice(0, 10);
+    return iso <= today ? iso : null;
+  })();
+  useEffect(() => {
+    if (nextWeek && !weekDate) { setWeekDate(nextWeek); setWeekEndDate(addSixDays(nextWeek)); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nextWeek]);
+
   async function addRecord(e: React.FormEvent) {
     e.preventDefault();
     setAddError(null);
@@ -430,6 +453,7 @@ function WCORecordsModal({
       setRecords(prev => [rec, ...prev]);
       setWeekDate(""); setWeekEndDate(""); setQuantity(""); setNotes("");
       toast("WCO record added.");
+      dataChanged();
       onRecordChanged?.();
     } catch (err) {
       setAddError(String(err).replace(/^(Type)?Error:\s*/, ""));
@@ -444,6 +468,7 @@ function WCORecordsModal({
       setRecords(prev => prev.filter(r => r.id !== id));
       setDeleteConf(null);
       toast("Record deleted.", "info");
+      dataChanged();
       onRecordChanged?.();
     } catch (err) { toast(String(err).replace(/^(Type)?Error:\s*/, ""), "error"); }
   }
@@ -458,6 +483,7 @@ function WCORecordsModal({
       setRecords(prev => prev.map(r => r.id === id ? updated : r));
       setEditingId(null);
       toast("Record updated.");
+      dataChanged();
     } catch (err) { toast(String(err).replace(/^(Type)?Error:\s*/, ""), "error"); }
     finally { setEditBusy(false); }
   }
@@ -480,11 +506,13 @@ function WCORecordsModal({
         setBulkStatus(`No valid rows. Required columns: week_date, quantity_liters (optional: week_end_date, notes).`);
         return;
       }
-      const res = await apiFetch<{ imported: number; skipped: number }>("/wco/records/bulk", {
+      const res = await apiFetch<{ imported: number; skipped: number; duplicates_in_request?: number }>("/wco/records/bulk", {
         method: "POST", body: JSON.stringify(valid),
       });
       const parts = [`${res.imported} imported`];
-      if (res.skipped) parts.push(`${res.skipped} already existed`);
+      if (res.skipped) parts.push(`${res.skipped} already existed (kept unchanged)`);
+      if (res.duplicates_in_request) parts.push(`${res.duplicates_in_request} duplicated within the file`);
+      if (res.imported) dataChanged();
       if (errors.length) parts.push(`${errors.length} rejected`);
       setBulkStatus(parts.join(", ") + ".");
       toast(`${res.imported} WCO record${res.imported !== 1 ? "s" : ""} imported.`);
@@ -534,6 +562,7 @@ function WCORecordsModal({
                     week_end_date: r.week_end_date ?? "",
                     quantity_liters: r.quantity_liters,
                     notes: r.notes ?? "",
+                    data_source: r.data_source ?? "unspecified",
                   })),
                 `${establishment.wco_code}_wco_records.csv`,
               )}
@@ -546,6 +575,7 @@ function WCORecordsModal({
             <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: "#94a3b8", padding: "2px 6px" }}>✕</button>
           </div>
         </div>
+        <RetrainStatusBadge refreshKey={retrainKey} />
         {bulkStatus && (
           <div style={{ marginBottom: 12, padding: "7px 12px", background: bulkStatus.includes("imported") ? "#f0fdf4" : "#fef2f2", border: `1px solid ${bulkStatus.includes("imported") ? "#bbf7d0" : "#fca5a5"}`, borderRadius: 8, fontSize: 12, color: bulkStatus.includes("imported") ? "#166534" : "#dc2626" }}>
             {bulkStatus}
@@ -630,6 +660,11 @@ function WCORecordsModal({
                 {weekDate && weekEndDate && (
                   <div style={{ fontSize: 10, color: "#166534", marginTop: 2 }}>
                     {weekRangeLabel(weekDate, weekEndDate)}
+                  </div>
+                )}
+                {weekDate && latestWeek && weekDate > latestWeek && nextWeek && weekDate !== nextWeek && (
+                  <div style={{ fontSize: 10, color: "#b45309", marginTop: 2 }}>
+                    Next week in this series is {nextWeek}; other dates leave a gap or an irregular interval.
                   </div>
                 )}
               </div>

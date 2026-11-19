@@ -281,6 +281,7 @@ export default function WCOMap() {
   const [historical,    setHistorical]    = useState<{ week_date: string; quantity_liters: number }[]>([]);
   const [forecasting,   setForecasting]   = useState(false);
   const [forecastError, setForecastError] = useState<string | null>(null);
+  const [forecastMeta, setForecastMeta] = useState<{ origin: string | null; version: string; warnings: string[] } | null>(null);
   const [sidebarOpen,  setSidebarOpen]  = useState(true);
   const [resetTick,    setResetTick]    = useState(0);
   const [refreshKey,   setRefreshKey]   = useState(0);
@@ -334,13 +335,15 @@ export default function WCOMap() {
     setForecast([]);
     setHistorical([]);
     setForecastError(null);
+    setForecastMeta(null);
     try {
       const [res, hist] = await Promise.all([
-        apiFetch<{ points: ForecastPoint[] }>(`/forecast/${id}?horizon_weeks=13`),
+        apiFetch<{ points: ForecastPoint[]; model_version: string; forecast_origin?: string | null; warnings?: string[] }>(`/forecast/${id}?horizon_weeks=13`),
         apiFetch<{ week_date: string; quantity_liters: number }[]>(`/wco/records?establishment_id=${id}`),
       ]);
       setForecast(res.points);
       setHistorical(hist);
+      setForecastMeta({ origin: res.forecast_origin ?? null, version: res.model_version, warnings: res.warnings ?? [] });
     } catch (e) {
       setForecastError(String(e).replace("Error: ", ""));
     } finally {
@@ -656,6 +659,12 @@ export default function WCOMap() {
             <div style={{ textAlign: "center", padding: "20px 0", color: "#718096", fontSize: 13 }}>Loading forecast…</div>
           )}
           {!forecasting && forecast.length > 0 && <ForecastChart points={forecast} historical={historical} />}
+          {!forecasting && forecast.length > 0 && forecastMeta && (
+            <div style={{ fontSize: 10.5, color: "#94a3b8", marginTop: 6, lineHeight: 1.5 }}>
+              Recursive 13-week forecast from the week of {forecastMeta.origin ?? "—"} · model {forecastMeta.version}
+              {forecastMeta.warnings.map(w => <div key={w} style={{ color: "#b45309" }}>⚠ {w}</div>)}
+            </div>
+          )}
           {!forecasting && !forecast.length && selectedId && (
             <div style={{
               marginTop: 8, padding: "10px 12px", borderRadius: 10,
