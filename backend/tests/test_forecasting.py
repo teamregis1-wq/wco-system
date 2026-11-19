@@ -220,18 +220,56 @@ def test_no_model_returns_503(client, researcher_headers, seeded):
     assert r.status_code == 503 and "No trained model" in r.json()["detail"]
 
 
-def test_bundled_model_used_until_first_retrain(client, researcher_headers, seeded):
-    bundled = Path(__file__).resolve().parents[1] / "app" / "services" / "model_artifacts"
-    shutil.copy(bundled / "lstm_wco.pt", model_store.LEGACY_WEIGHTS_PATH)
-    shutil.copy(bundled / "scaler.npz", model_store.LEGACY_SCALER_PATH)
-    try:
-        r = client.get(f"{API}/forecast/{seeded[0].id}", headers=researcher_headers)
-        assert r.status_code == 200 and r.json()["model_version"] == model_store.BUNDLED_VERSION
-        s = client.get(f"{API}/forecast/training-status", headers=researcher_headers).json()
-        assert s["active_model"]["source"] == "bundled"
-    finally:
-        model_store.LEGACY_WEIGHTS_PATH.unlink()
-        model_store.LEGACY_SCALER_PATH.unlink()
+def test_bundled_model_used_until_first_retrain(client, researcher_headers, seeded, monkeypatch):
+    monkeypatch.setattr(model_store, "BUNDLED_FALLBACK", True)
+    r = client.get(f"{API}/forecast/{seeded[0].id}", headers=researcher_headers)
+    assert r.status_code == 200 and r.json()["model_version"] == model_store.BUNDLED_VERSION
+    s = client.get(f"{API}/forecast/training-status", headers=researcher_headers).json()
+    assert s["active_model"]["source"] == "bundled"
+
+
+def test_numpy_lstm_matches_pytorch():
+    """The API's NumPy forward pass reproduces torch.nn.LSTM exactly (float32 tolerance)."""
+    import torch
+
+    from app.services.lstm_numpy import NumpyLSTM, deserialize_weights, serialize_weights
+    torch.manual_seed(7)
+    tm = build_model()
+    blob = serialize_weights(tm.state_dict())
+    nm = NumpyLSTM(deserialize_weights(blob))
+    X = np.random.default_rng(1).uniform(0, 1, (40, 12))
+    with torch.no_grad():
+        t1 = tm(torch.tensor(X, dtype=torch.float32).unsqueeze(-1)).numpy().ravel()
+    assert np.allclose(nm.predict_next(X), t1, atol=1e-5)
+    # 13-step recursion: torch path vs NumPy path
+    assert np.allclose(recursive_forecast(nm, X, 13), recursive_forecast(tm, X, 13), atol=1e-4)
+
+
+def test_bundled_weights_npz_equals_legacy_pt():
+    from app.services.lstm_numpy import deserialize_weights
+    a = deserialize_weights(model_store.LEGACY_NPZ_PATH.read_bytes())
+    b = deserialize_weights(model_store.LEGACY_WEIGHTS_PATH.read_bytes())   # torch format
+    assert a.keys() == b.keys() and all(np.array_equal(a[k], b[k]) for k in a)
+
+
+def test_api_inference_path_does_not_import_torch():
+    """The deployed API must work without PyTorch installed (bundle-size limit)."""
+    import subprocess
+    import sys
+    code = ("import sys, builtins; real = builtins.__import__\n"
+            "def guard(name, *a, **k):\n"
+            "    if name == 'torch' or name.startswith('torch.'): raise ImportError('torch blocked')\n"
+            "    return real(name, *a, **k)\n"
+            "builtins.__import__ = guard\n"
+            "import app.main\n"
+            "from app.services import forecasting, model_store, retraining\n"
+            "m = model_store._load_bundled(); import numpy as np\n"
+            "print(forecasting.recursive_forecast(m.model, np.full((2, 12), 0.4), 13).shape)\n")
+    env = {**__import__("os").environ, "ML_BUNDLED_FALLBACK": "true"}
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                         cwd=str(Path(__file__).resolve().parents[1]), env=env)
+    assert out.returncode == 0, out.stderr[-2000:]
+    assert "(2, 13)" in out.stdout
 
 
 # ── Forecast API ─────────────────────────────────────────────────────────────
@@ -276,3 +314,26 @@ def test_aggregate_equals_sum_of_individual_forecasts(client, researcher_headers
         assert agg[wk]["total_predicted_liters"] == pytest.approx(total, abs=0.2)
         assert agg[wk]["establishment_count"] == 6
     assert newbie.id  # (no records, so it never enters the aggregate)
+
+
+def test_legacy_torch_weights_without_torch_give_clear_503(client, researcher_headers, seeded, db,
+                                                           scheduler, monkeypatch):
+    """A model stored before the NPZ change must not 500 on a torch-free API."""
+    import io
+    import sys
+
+    import torch
+    _train(scheduler)
+    mv = db.scalar(select(ModelVersion).where(ModelVersion.is_active.is_(True)))
+    buf = io.BytesIO()
+    torch.save(build_model().state_dict(), buf)            # legacy torch.save() blob
+    mv.weights = buf.getvalue()
+    mv.weights_sha256 = model_store.sha256_hex(mv.weights)
+    db.commit()
+    model_store.invalidate_cache()
+    shutil.rmtree(model_store.ARTIFACT_DIR / "versions", ignore_errors=True)
+    monkeypatch.setitem(sys.modules, "torch", None)          # simulate the torch-free API
+    r = client.get(f"{API}/forecast/{seeded[0].id}", headers=researcher_headers)
+    assert r.status_code == 503 and "legacy PyTorch format" in r.json()["detail"]
+    r = client.get(f"{API}/forecast/aggregate", headers=researcher_headers)
+    assert r.status_code == 503

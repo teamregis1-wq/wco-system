@@ -15,12 +15,26 @@ Workflow
 This is **automatic batch retraining**: every run retrains the model from
 scratch on the full current dataset. It is NOT online / incremental learning.
 
+Executors (RETRAIN_EXECUTOR)
+---------------------------
+* "worker"    — the API only records/coalesces the pending job (durable, in
+  PostgreSQL). A separate long-running process, ``python -m
+  scripts.retrain_worker``, claims due jobs and trains. Required on Vercel:
+  serverless functions are frozen after the response, so background threads
+  cannot be relied on, and the API bundle does not include PyTorch.
+* "inprocess" — the API process also executes jobs with an in-process timer
+  (local development or a single long-running server).
+Both use the same database queue, claim, locks and activation code.
+
+Retries: a job that fails for a transient reason (not a data-validation
+rejection) is re-queued automatically up to RETRAIN_MAX_ATTEMPTS, and a job
+orphaned by a crashed worker is marked failed and re-queued.
+
 Limitations (deliberate, for a thesis demonstration)
 ---------------------------------------------------
-* The scheduler is in-process (threading.Timer), not a durable job queue.
-  Pending jobs are stored in the database, so a restart re-arms them on
-  startup, but a job interrupted mid-training is marked failed (and the
-  previous model stays active) rather than resumed.
+* In "inprocess" mode the scheduler is a threading.Timer, not a durable
+  worker; pending jobs survive restarts (they are in the database) but a job
+  interrupted mid-training is failed and re-queued rather than resumed.
 * With several backend workers, each worker may arm a timer; the single
   pending-job row, the atomic pending→training claim, and the PostgreSQL
   advisory lock guarantee that only one worker trains at a time.
@@ -93,8 +107,15 @@ def load_observations(db: Session) -> list[Observation]:
 def upsert_pending_job(
     db: Session, *, trigger: str, reason: str,
     user_email: str | None = None, user_id: int | None = None,
+    attempt: int = 1, delay_seconds: float = 0.0,
 ) -> int:
-    """Create the single pending job, or coalesce into the existing one."""
+    """Create the single pending job, or coalesce into the existing one.
+
+    ``delay_seconds`` postpones a new job (used for retry back-off). A pending
+    job that already exists absorbs the request; fresh data changes take
+    precedence over a retry.
+    """
+    from datetime import timedelta
     for _ in range(3):
         now = utcnow()
         job = db.scalar(
@@ -111,8 +132,9 @@ def upsert_pending_job(
         else:
             job = ModelTrainingJob(
                 status=JOB_PENDING, trigger=trigger, reason=reason[:255], change_count=1,
-                requested_by_email=user_email, requested_by_id=user_id,
-                requested_at=now, last_change_at=now, activated=False,
+                requested_by_email=user_email, requested_by_id=user_id, attempt=attempt,
+                requested_at=now, last_change_at=now + timedelta(seconds=delay_seconds),
+                activated=False,
             )
             db.add(job)
         try:
@@ -131,6 +153,7 @@ def _job_dict(job: ModelTrainingJob | None) -> dict | None:
         "id": job.id,
         "status": job.status,
         "trigger": job.trigger,
+        "attempt": job.attempt,
         "reason": job.reason,
         "change_count": job.change_count,
         "requested_by": job.requested_by_email,
@@ -191,7 +214,7 @@ def get_training_status(db: Session) -> dict:
             "evaluation": active.metrics,
             "job_id": active.job_id,
         }
-    elif model_store.LEGACY_WEIGHTS_PATH.exists():
+    elif model_store.bundled_model_available():
         active_model = {
             "version": model_store.BUNDLED_VERSION,
             "source": "bundled",
@@ -206,6 +229,7 @@ def get_training_status(db: Session) -> dict:
     last = training or pending or finished
     metrics = (active_model or {}).get("evaluation")
     sched = get_scheduler()
+    worker = worker_status(db)
     return {
         "status": status,                       # idle | pending | training | completed | failed
         "metrics": metrics,                     # evaluation of the ACTIVE model
@@ -223,9 +247,45 @@ def get_training_status(db: Session) -> dict:
             "enabled": sched.enabled,
             "debounce_seconds": sched.debounce_seconds,
             "mode": "automatic batch retraining (full retrain on the current dataset; not online learning)",
-            "scheduler": "in-process timer; job state persisted in the database",
+            "executor": settings.effective_retrain_executor,
+            "scheduler": ("separate worker process (scripts/retrain_worker.py); jobs queued in the database"
+                          if settings.effective_retrain_executor == "worker"
+                          else "in-process timer in the API server; jobs queued in the database"),
+            "max_attempts": settings.retrain_max_attempts,
+            "worker": worker,
         },
     }
+
+
+def worker_status(db: Session) -> dict | None:
+    """Most recent retraining-worker heartbeat (None if no worker ever ran)."""
+    from app.models.ml import RetrainingWorker
+    w = db.scalar(select(RetrainingWorker).order_by(desc(RetrainingWorker.last_seen_at)).limit(1))
+    if w is None:
+        return None
+    age = (utcnow() - _aware(w.last_seen_at)).total_seconds()
+    return {
+        "worker_id": w.worker_id,
+        "state": w.state,
+        "current_job_id": w.current_job_id,
+        "last_seen_at": _iso(w.last_seen_at),
+        "seconds_since_heartbeat": round(age, 1),
+        "online": w.state != "stopped" and age <= 3 * settings.worker_heartbeat_seconds + 5,
+    }
+
+
+def record_worker_heartbeat(db: Session, worker_id: str, *, state: str,
+                            hostname: str | None = None, current_job_id: int | None = None) -> None:
+    from app.models.ml import RetrainingWorker
+    w = db.get(RetrainingWorker, worker_id)
+    now = utcnow()
+    if w is None:
+        w = RetrainingWorker(worker_id=worker_id, hostname=hostname, started_at=now)
+        db.add(w)
+    w.last_seen_at = now
+    w.state = state
+    w.current_job_id = current_job_id
+    db.commit()
 
 
 # ── Locks ─────────────────────────────────────────────────────────────────────
@@ -351,18 +411,37 @@ def run_training_job(session_factory, job_id: int, cfg: TrainingConfig | None = 
                            "update", "lstm_training",
                            details=f"Job #{job_id} FAILED — previous model kept active. {job.error[:300]}")
                 db.commit()
+                if not isinstance(exc, DataValidationError):
+                    requeue_retry(db, job)
         except Exception:
             logger.exception("Could not record failure of retraining job %s", job_id)
+
+
+def requeue_retry(db: Session, job: ModelTrainingJob) -> int | None:
+    """Re-queue a transiently failed/interrupted job with back-off, up to the attempt limit."""
+    attempt = (job.attempt or 1) + 1
+    if attempt > settings.retrain_max_attempts:
+        logger.warning("Job %s failed %s time(s); not retrying.", job.id, job.attempt)
+        return None
+    new_id = upsert_pending_job(
+        db, trigger="retry", reason=f"retry of job #{job.id} (attempt {attempt})",
+        user_email=job.requested_by_email, user_id=job.requested_by_id,
+        attempt=attempt, delay_seconds=30.0 * (attempt - 1))
+    logger.info("Re-queued job %s as job %s (attempt %s)", job.id, new_id, attempt)
+    return new_id
 
 
 # ── Scheduler ─────────────────────────────────────────────────────────────────
 
 class RetrainingScheduler:
     def __init__(self, session_factory, engine, *, enabled: bool, debounce_seconds: float,
-                 job_runner=run_training_job, poll_seconds: float = 0.0):
+                 job_runner=run_training_job, poll_seconds: float = 0.0,
+                 execute_jobs: bool = True):
         self._sf = session_factory
         self._engine = engine
         self.enabled = enabled
+        # False = queue only (API on Vercel); a separate worker executes jobs.
+        self.execute_jobs = execute_jobs
         self.debounce_seconds = float(debounce_seconds)
         # Safety net: periodically look for a pending job in the database, so a
         # job queued by another worker/process (or one whose timer was lost)
@@ -390,6 +469,7 @@ class RetrainingScheduler:
         return job_id
 
     def request_manual_training(self, user_email: str | None, user_id: int | None) -> int:
+        """Queue a job that starts without the debounce delay."""
         with self._sf() as db:
             if db.scalar(select(ModelTrainingJob.id).where(ModelTrainingJob.status == JOB_TRAINING)):
                 raise TrainingInProgressError("Training already in progress.")
@@ -398,23 +478,39 @@ class RetrainingScheduler:
         self._schedule(0)
         return job_id
 
+    def recover_orphaned_jobs(self) -> int:
+        """Fail and re-queue jobs left in 'training' by a crashed process.
+
+        Only runs when no process holds the training lock, so a job that is
+        genuinely being trained by another worker is never touched.
+        """
+        n = 0
+        with advisory_lock(self._engine) as no_one_training:
+            if not no_one_training:
+                return 0
+            with self._sf() as db:
+                orphans = db.scalars(select(ModelTrainingJob)
+                                     .where(ModelTrainingJob.status == JOB_TRAINING)).all()
+                for job in orphans:
+                    job.status = JOB_FAILED
+                    job.finished_at = utcnow()
+                    job.error = ("Interrupted: the training process stopped before finishing. "
+                                 "The previously active model was kept.")
+                    n += 1
+                db.commit()
+                for job in orphans:
+                    requeue_retry(db, job)
+        if n:
+            logger.warning("Marked %s interrupted training job(s) as failed", n)
+        return n
+
     def start(self) -> None:
         """Recover state after a restart: fail orphaned jobs, re-arm pending ones."""
         self._stopped = False
+        if not self.execute_jobs:
+            return   # queue-only API: the worker process owns recovery and execution
         try:
-            with advisory_lock(self._engine) as no_one_training:
-                if no_one_training:
-                    with self._sf() as db:
-                        n = db.execute(
-                            update(ModelTrainingJob)
-                            .where(ModelTrainingJob.status == JOB_TRAINING)
-                            .values(status=JOB_FAILED, finished_at=utcnow(),
-                                    error="Interrupted: the backend restarted while training. "
-                                          "The previously active model was kept.")
-                        ).rowcount
-                        db.commit()
-                        if n:
-                            logger.warning("Marked %s interrupted training job(s) as failed", n)
+            self.recover_orphaned_jobs()
             with self._sf() as db:
                 pending = db.scalar(select(ModelTrainingJob)
                                     .where(ModelTrainingJob.status == JOB_PENDING))
@@ -442,9 +538,18 @@ class RetrainingScheduler:
                 self._timer.cancel()
                 self._timer = None
 
-    def run_pending_now(self, respect_debounce: bool = False) -> int | None:
-        """Synchronously claim and run the pending job (tests, CLI)."""
-        return self._try_run(respect_debounce=respect_debounce)
+    def run_pending_now(self, respect_debounce: bool = False, rearm: bool = True) -> int | None:
+        """Synchronously claim and run the pending job (tests, worker loop, CLI).
+
+        With rearm=False nothing is scheduled with timers (the worker loop polls).
+        """
+        return self._try_run(respect_debounce=respect_debounce, rearm=rearm)
+
+    def seconds_until_due(self) -> float | None:
+        """Seconds until the pending job may start (None if there is none)."""
+        with self._sf() as db:
+            job = db.scalar(select(ModelTrainingJob).where(ModelTrainingJob.status == JOB_PENDING))
+            return None if job is None else self._remaining_debounce(job)
 
     # Internals ----------------------------------------------------------------
 
@@ -455,6 +560,8 @@ class RetrainingScheduler:
         return max(0.0, self.debounce_seconds - elapsed)
 
     def _schedule(self, delay: float) -> None:
+        if not self.execute_jobs:
+            return   # queue-only: nothing to arm in this process
         with self._timer_lock:
             if self._stopped:
                 return
@@ -471,7 +578,7 @@ class RetrainingScheduler:
         except Exception:
             logger.exception("Retraining timer failed")
 
-    def _try_run(self, respect_debounce: bool) -> int | None:
+    def _try_run(self, respect_debounce: bool, rearm: bool = True) -> int | None:
         # Cheap check first, so idle polling never takes the advisory lock.
         with self._sf() as db:
             if db.scalar(select(ModelTrainingJob.id)
@@ -484,7 +591,8 @@ class RetrainingScheduler:
             with advisory_lock(self._engine) as got:
                 if not got:
                     # Another worker/process holds the training lock; check back later.
-                    self._schedule(max(self.debounce_seconds, 5.0))
+                    if rearm:
+                        self._schedule(max(self.debounce_seconds, 5.0))
                     return None
                 with self._sf() as db:
                     job = db.scalar(select(ModelTrainingJob)
@@ -494,7 +602,8 @@ class RetrainingScheduler:
                     if respect_debounce:
                         remaining = self._remaining_debounce(job)
                         if remaining > 0.05:
-                            self._schedule(remaining)
+                            if rearm:
+                                self._schedule(remaining)
                             return None
                     claimed = db.execute(
                         update(ModelTrainingJob)
@@ -510,7 +619,7 @@ class RetrainingScheduler:
                 return job_id
         finally:
             self._train_lock.release()
-            if job_id is not None:
+            if job_id is not None and rearm:
                 self._rearm_if_pending()
 
     def _rearm_if_pending(self) -> None:
@@ -535,11 +644,13 @@ def get_scheduler() -> RetrainingScheduler:
         with _scheduler_lock:
             if _scheduler is None:
                 from app.core.database import SessionLocal, engine
+                inproc = settings.effective_retrain_executor == "inprocess"
                 _scheduler = RetrainingScheduler(
                     SessionLocal, engine,
                     enabled=settings.auto_retrain_enabled,
                     debounce_seconds=settings.retrain_debounce_seconds,
-                    poll_seconds=settings.retrain_poll_seconds,
+                    poll_seconds=settings.retrain_poll_seconds if inproc else 0.0,
+                    execute_jobs=inproc,
                 )
     return _scheduler
 

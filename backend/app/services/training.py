@@ -139,35 +139,42 @@ def build_model(hidden_size: int = HIDDEN_SIZE, num_layers: int = NUM_LAYERS):
 
 
 def serialize_state_dict(state_dict: dict) -> bytes:
-    import torch
-    buf = io.BytesIO()
-    torch.save(state_dict, buf)
-    return buf.getvalue()
+    """Weights blob stored in model_versions: portable NPZ (no PyTorch needed to read)."""
+    from app.services.lstm_numpy import serialize_weights
+    return serialize_weights(state_dict)
 
 
 def deserialize_state_dict(data: bytes) -> dict:
-    import torch
-    # weights_only=True: refuse arbitrary pickled objects in the blob.
-    return torch.load(io.BytesIO(data), map_location="cpu", weights_only=True)
+    """NumPy arrays keyed like the PyTorch state_dict (accepts legacy torch blobs)."""
+    from app.services.lstm_numpy import deserialize_weights
+    return deserialize_weights(data)
 
 
 def recursive_forecast(model, windows_scaled: np.ndarray, horizon: int) -> np.ndarray:
     """Recursive multi-step forecast in SCALED units.
 
     windows_scaled: (n, seq_len) — the most recent seq_len observations.
-    Returns (n, horizon). Step k uses predictions 1..k-1 as inputs, exactly
-    like the production forecast endpoint (both call this function).
+    Returns (n, horizon). Step k uses predictions 1..k-1 as inputs. The API
+    and the held-out backtest both call this with the same NumpyLSTM, so the
+    evaluated forecasts are produced by exactly the deployed code path.
+    A PyTorch module is also accepted (used only in tests).
     """
-    import torch
-    window = torch.tensor(np.asarray(windows_scaled, dtype=np.float32)).unsqueeze(-1)
+    window = np.asarray(windows_scaled, dtype=np.float64)
     seq_len = window.shape[1]
     out = np.empty((window.shape[0], horizon), dtype=np.float64)
-    model.eval()
-    with torch.no_grad():
-        for k in range(horizon):
-            yhat = model(window[:, -seq_len:, :])           # (n, 1)
-            out[:, k] = yhat[:, 0].numpy()
-            window = torch.cat([window, yhat.unsqueeze(-1)], dim=1)
+    if hasattr(model, "predict_next"):
+        step = model.predict_next
+    else:
+        import torch
+
+        def step(w):
+            model.eval()
+            with torch.no_grad():
+                return model(torch.tensor(w, dtype=torch.float32).unsqueeze(-1))[:, 0].numpy()
+    for k in range(horizon):
+        yhat = np.asarray(step(window[:, -seq_len:]), dtype=np.float64)
+        out[:, k] = yhat
+        window = np.concatenate([window, yhat[:, None]], axis=1)
     return out
 
 
@@ -440,12 +447,12 @@ def run_training_pipeline(
 
     if best_state is None:
         raise RuntimeError("Training produced no usable checkpoint.")
-    model.load_state_dict(best_state)
-    model.eval()
+    # Evaluate with the exact inference implementation the API uses.
+    from app.services.lstm_numpy import NumpyLSTM
+    model = NumpyLSTM({k: v.numpy() for k, v in best_state.items()})
 
     # ── One-step (1-week-ahead) evaluation on held-out test weeks ──────────────
-    with torch.no_grad():
-        pred_test = unscale(model(torch.tensor(X_test)).numpy().ravel())
+    pred_test = unscale(model.predict_next(X_test[..., 0]))
     true_test = unscale(y_test)
     pred_test = np.maximum(pred_test, 0.0)
     snaive = np.asarray(buckets["test"]["snaive"], dtype=np.float64)
@@ -489,7 +496,8 @@ def run_training_pipeline(
 
     hyperparams = cfg.as_dict()
     hyperparams.update({"architecture": "LSTM(1→64, 2 layers) + Linear(64→1)",
-                        "loss": "MSE", "optimizer": "Adam", "scaler": "min-max (train period)"})
+                        "loss": "MSE", "optimizer": "Adam", "scaler": "min-max (train period)",
+                        "weights_format": "npz-v1", "inference": "NumPy forward pass"})
     eligible_ids = {s.establishment_id for s in segments}
     return TrainingResult(
         state_dict=best_state,

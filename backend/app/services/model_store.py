@@ -11,8 +11,11 @@ Durability model
   Files are written to a temporary name and atomically renamed, and their
   SHA-256 is checked against the database before use, so a partially written
   or corrupted file is never loaded — it is re-fetched from the database.
-* The bundled ``lstm_wco.pt`` + ``scaler.npz`` (trained before this audit)
-  are used only when the database has no active version yet.
+* The bundled ``lstm_wco.npz`` + ``scaler.npz`` (trained before this audit)
+  are used only when the database has no active version yet (and
+  ML_BUNDLED_FALLBACK is true).
+* Inference is a NumPy forward pass (``lstm_numpy.NumpyLSTM``); PyTorch is
+  needed only by the training worker.
 * Each worker process keeps one loaded model in memory and swaps it in a
   single assignment after it has been fully loaded and verified.
 """
@@ -32,19 +35,28 @@ import numpy as np
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
+from app.core.config import running_on_vercel, settings
 from app.models.ml import ModelVersion
-from app.services.training import (
-    HIDDEN_SIZE, NUM_LAYERS, build_model, deserialize_state_dict,
-)
+from app.services.lstm_numpy import LegacyWeightsFormatError, NumpyLSTM, deserialize_weights
 
 logger = logging.getLogger("wco.ml")
 
-ARTIFACT_DIR = (Path(settings.model_artifact_dir) if settings.model_artifact_dir
-                else Path(__file__).parent / "model_artifacts")
-LEGACY_WEIGHTS_PATH = ARTIFACT_DIR / "lstm_wco.pt"
-LEGACY_SCALER_PATH = ARTIFACT_DIR / "scaler.npz"
+# Read-only, shipped with the code.
+BUNDLED_DIR = Path(__file__).parent / "model_artifacts"
+LEGACY_NPZ_PATH = BUNDLED_DIR / "lstm_wco.npz"
+LEGACY_WEIGHTS_PATH = BUNDLED_DIR / "lstm_wco.pt"
+LEGACY_SCALER_PATH = BUNDLED_DIR / "scaler.npz"
 BUNDLED_VERSION = "lstm-v1-bundled"
+BUNDLED_FALLBACK = settings.ml_bundled_fallback
+
+# Writable local cache of DB-stored versions. Serverless filesystems are
+# read-only except the temp directory.
+if settings.model_artifact_dir:
+    ARTIFACT_DIR = Path(settings.model_artifact_dir)
+elif running_on_vercel():
+    ARTIFACT_DIR = Path(tempfile.gettempdir()) / "wco-model-cache"
+else:
+    ARTIFACT_DIR = BUNDLED_DIR
 
 
 class ModelIntegrityError(RuntimeError):
@@ -123,23 +135,25 @@ def _read_local_cache(version: str, expected_sha: str) -> bytes | None:
 
 # ── Loading ───────────────────────────────────────────────────────────────────
 
-def _instantiate(state_dict: dict, hyperparams: dict | None):
-    hp = hyperparams or {}
-    model = build_model(hp.get("hidden_size", HIDDEN_SIZE), hp.get("num_layers", NUM_LAYERS))
-    model.load_state_dict(state_dict, strict=True)
-    model.eval()
-    return model
+def _instantiate(arrays: dict, hyperparams: dict | None) -> NumpyLSTM:
+    return NumpyLSTM(arrays)
+
+
+def bundled_model_available() -> bool:
+    return BUNDLED_FALLBACK and LEGACY_SCALER_PATH.exists() and (
+        LEGACY_NPZ_PATH.exists() or LEGACY_WEIGHTS_PATH.exists())
 
 
 def _load_bundled() -> LoadedModel:
     global _cache
     if _cache is not None and _cache.version == BUNDLED_VERSION:
         return _cache
-    if not LEGACY_WEIGHTS_PATH.exists() or not LEGACY_SCALER_PATH.exists():
+    if not bundled_model_available():
         raise FileNotFoundError(
             "No trained model is available. Train one from Admin → Forecasting "
             "(POST /api/v1/forecast/train).")
-    state = deserialize_state_dict(LEGACY_WEIGHTS_PATH.read_bytes())
+    path = LEGACY_NPZ_PATH if LEGACY_NPZ_PATH.exists() else LEGACY_WEIGHTS_PATH
+    state = deserialize_weights(path.read_bytes())
     scaler = np.load(str(LEGACY_SCALER_PATH))
     loaded = LoadedModel(
         version=BUNDLED_VERSION,
@@ -188,9 +202,15 @@ def get_active_model(db: Session) -> LoadedModel:
                 })
             except OSError:
                 logger.warning("Could not write local model cache (read-only filesystem?)")
+        try:
+            arrays = deserialize_weights(data)
+        except LegacyWeightsFormatError as e:
+            raise ModelIntegrityError(
+                f"Active model {row.version} was saved in the legacy PyTorch format, which this "
+                "server cannot load without PyTorch. Retrain (Admin → Retrain now) to convert it.") from e
         loaded = LoadedModel(
             version=row.version,
-            model=_instantiate(deserialize_state_dict(data), row.hyperparams),
+            model=_instantiate(arrays, row.hyperparams),
             scaler_min=row.scaler_min,
             scaler_max=row.scaler_max,
             source=source,

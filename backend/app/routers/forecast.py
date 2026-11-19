@@ -36,15 +36,19 @@ def training_status(db: Session = Depends(get_db)):
 
 @router.post("/train", status_code=202)
 def trigger_training(current_user=Depends(require_role("admin", "researcher"))):
-    """Start a retraining job now (manual trigger). Returns immediately.
+    """Queue a retraining job that starts without the debounce delay. Returns immediately.
 
-    Any pending automatic job is folded into this one.
+    Any pending automatic job is folded into this one. With RETRAIN_EXECUTOR=worker
+    (Vercel) the job runs in the retraining worker; otherwise in this server.
     """
+    from app.core.config import settings
     try:
         job_id = get_scheduler().request_manual_training(current_user.email, current_user.id)
     except TrainingInProgressError:
         raise HTTPException(status_code=409, detail="Training already in progress.")
-    return {"status": "training_started", "job_id": job_id}
+    if settings.effective_retrain_executor == "worker":
+        return {"status": "queued", "job_id": job_id, "executor": "worker"}
+    return {"status": "training_started", "job_id": job_id, "executor": "inprocess"}
 
 
 @router.get("/aggregate", response_model=list[AggregateForecastPoint])

@@ -224,13 +224,15 @@ def test_failed_training_keeps_previous_model(client, researcher_headers, seeded
     scheduler.notify_data_changed("second")
     scheduler.run_pending_now()
 
-    last = jobs(db)[-1]
-    assert last.status == "failed" and "simulated failure" in last.error and not last.activated
+    failed, retry = jobs(db)[-2:]
+    assert failed.status == "failed" and "simulated failure" in failed.error and not failed.activated
+    assert retry.status == "pending" and retry.trigger == "retry"      # transient → re-queued
     assert db.scalar(select(ModelVersion.version).where(ModelVersion.is_active.is_(True))) == v1
     assert db.query(ModelVersion).count() == 1
 
     status = client.get(f"{API}/forecast/training-status", headers=researcher_headers).json()
-    assert status["status"] == "failed" and status["model_version"] == v1
+    assert status["status"] == "pending" and status["model_version"] == v1   # retry queued
+    assert status["last_finished_job"]["status"] == "failed"
     fc = client.get(f"{API}/forecast/{seeded[0].id}", headers=researcher_headers)
     assert fc.status_code == 200 and fc.json()["model_version"] == v1
 
@@ -245,7 +247,7 @@ def test_failure_during_activation_rolls_back(seeded, db, scheduler, monkeypatch
     scheduler.notify_data_changed("second")
     scheduler.run_pending_now()
     db.expire_all()
-    assert jobs(db)[-1].status == "failed"
+    assert jobs(db)[-2].status == "failed" and jobs(db)[-1].trigger == "retry"
     assert db.query(ModelVersion).count() == 1          # half-written version was rolled back
     assert db.scalar(select(ModelVersion.version).where(ModelVersion.is_active.is_(True))) == v1
 
@@ -271,8 +273,10 @@ def test_restart_marks_orphaned_training_failed_and_rearms_pending(db):
     sched = RetrainingScheduler(SessionLocal, engine, enabled=True, debounce_seconds=5)
     sched._schedule = lambda delay: armed.append(delay)
     sched.start()
-    [job] = jobs(db)
-    assert job.status == "failed" and "restarted" in job.error
+    orphan, retry = jobs(db)
+    assert orphan.status == "failed" and "Interrupted" in orphan.error
+    assert retry.status == "pending" and retry.attempt == 2
+    assert armed                                          # the re-queued job was armed
 
     sched.notify_data_changed("after restart")
     armed.clear()
@@ -321,3 +325,119 @@ def test_poller_runs_job_queued_by_another_process(db):
     finally:
         sched.shutdown()
     assert jobs(db)[0].status == "completed"
+
+
+# ── Deployment architecture: queue-only API + separate worker ────────────────
+
+@pytest.fixture
+def queue_only_api(monkeypatch):
+    """The API as deployed on Vercel: it only queues jobs (RETRAIN_EXECUTOR=worker)."""
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "retrain_executor", "worker")
+    sched = RetrainingScheduler(SessionLocal, engine, enabled=True, debounce_seconds=0,
+                                execute_jobs=False)
+    retraining.set_scheduler(sched)
+    return sched
+
+
+def test_executor_defaults_to_worker_on_vercel(monkeypatch):
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "retrain_executor", "")
+    monkeypatch.delenv("VERCEL", raising=False)
+    monkeypatch.delenv("VERCEL_ENV", raising=False)
+    assert settings.effective_retrain_executor == "inprocess"
+    monkeypatch.setenv("VERCEL", "1")
+    assert settings.effective_retrain_executor == "worker"
+
+
+def test_queue_only_api_never_trains(client, researcher_headers, admin_headers, seeded, db, queue_only_api):
+    e = seeded[0]
+    add_record(client, researcher_headers, e.id, next_week(db, e.id) - timedelta(weeks=70))
+    queue_only_api.start()                                  # must not recover/execute anything
+    r = client.post(f"{API}/forecast/train", headers=admin_headers)
+    assert r.status_code == 202 and r.json()["status"] == "queued"
+    assert r.json()["executor"] == "worker"
+    time.sleep(0.3)
+    [job] = jobs(db)
+    assert job.status == "pending" and job.trigger == "manual" and job.change_count == 2
+    s = client.get(f"{API}/forecast/training-status", headers=admin_headers).json()
+    assert s["status"] == "pending" and s["auto_retraining"]["executor"] == "worker"
+    assert s["auto_retraining"]["worker"] is None           # no worker has ever run
+
+
+def test_worker_process_executes_queued_job(client, researcher_headers, seeded, db,
+                                            queue_only_api, monkeypatch):
+    """API queues → worker (scripts.retrain_worker --once) trains → API serves new version."""
+    from app.core.config import settings
+    from scripts import retrain_worker
+    monkeypatch.setattr(settings, "retrain_debounce_seconds", 0)
+    e = seeded[0]
+    add_record(client, researcher_headers, e.id, next_week(db, e.id) - timedelta(weeks=70))
+    assert jobs(db)[0].status == "pending"
+
+    assert retrain_worker.main(["--once", "--max-wait", "0"]) == 0
+
+    [job] = jobs(db)
+    assert job.status == "completed" and job.activated, job.error
+    s = client.get(f"{API}/forecast/training-status", headers=researcher_headers).json()
+    assert s["model_version"] == job.model_version
+    w = s["auto_retraining"]["worker"]
+    assert w["state"] == "stopped" and w["online"] is False      # --once exits cleanly
+    fc = client.get(f"{API}/forecast/{e.id}", headers=researcher_headers).json()
+    assert fc["model_version"] == job.model_version and len(fc["points"]) == 13
+
+
+def test_worker_once_without_jobs_exits_cleanly(db, monkeypatch):
+    from scripts import retrain_worker
+    assert retrain_worker.main(["--once", "--max-wait", "0"]) == 0
+    assert jobs(db) == []
+
+
+def test_transient_failure_is_retried_with_backoff(seeded, db, scheduler, monkeypatch):
+    scheduler._schedule = lambda delay: None
+    calls = {"n": 0}
+
+    def flaky(*a, **k):
+        calls["n"] += 1
+        raise ConnectionError("simulated network blip")
+    monkeypatch.setattr(retraining, "run_training_pipeline", flaky)
+    scheduler.notify_data_changed("x")
+    scheduler.run_pending_now()
+    first, retry = jobs(db)
+    assert first.status == "failed" and first.attempt == 1
+    assert retry.status == "pending" and retry.trigger == "retry" and retry.attempt == 2
+    assert "retry of job" in retry.reason
+    from app.services.retraining import _aware, utcnow
+    assert (_aware(retry.last_change_at) - utcnow()).total_seconds() > 20     # back-off applied
+
+    # Exhaust the attempts: no further retries after RETRAIN_MAX_ATTEMPTS (3).
+    scheduler.run_pending_now()
+    scheduler.run_pending_now()
+    statuses = [(j.attempt, j.status) for j in jobs(db)]
+    assert statuses == [(1, "failed"), (2, "failed"), (3, "failed")]
+
+
+def test_data_validation_failure_is_not_retried(db, scheduler):
+    from conftest import seed_series
+    seed_series(db, n_estab=2, weeks=14)
+    scheduler._schedule = lambda delay: None
+    scheduler.notify_data_changed("tiny")
+    scheduler.run_pending_now()
+    assert [(j.status, j.trigger) for j in jobs(db)] == [("failed", "automatic")]
+
+
+def test_orphaned_job_is_failed_and_requeued(db):
+    db.add(ModelTrainingJob(status="training", trigger="automatic", change_count=1, activated=False))
+    db.commit()
+    sched = RetrainingScheduler(SessionLocal, engine, enabled=True, debounce_seconds=0)
+    assert sched.recover_orphaned_jobs() == 1
+    orphan, retry = jobs(db)
+    assert orphan.status == "failed" and "Interrupted" in orphan.error
+    assert retry.status == "pending" and retry.attempt == 2
+
+
+def test_worker_heartbeat_reported_online(client, admin_headers, db):
+    from app.services.retraining import record_worker_heartbeat
+    record_worker_heartbeat(db, "laptop:123", state="idle", hostname="laptop")
+    w = client.get(f"{API}/forecast/training-status", headers=admin_headers).json()["auto_retraining"]["worker"]
+    assert w["online"] is True and w["worker_id"] == "laptop:123"

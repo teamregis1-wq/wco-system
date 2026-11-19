@@ -39,8 +39,10 @@ class ModelTrainingJob(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     status: Mapped[str] = mapped_column(String(20), index=True)
-    # 'automatic' (data change) | 'manual' (POST /forecast/train)
+    # 'automatic' (data change) | 'manual' (POST /forecast/train) | 'retry'
     trigger: Mapped[str] = mapped_column(String(20))
+    # 1 for a normal job; incremented when a transiently failed job is retried.
+    attempt: Mapped[int] = mapped_column(Integer, default=1, server_default=text("1"))
     # Human-readable description of what caused the job, e.g. "wco_record.create".
     reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # How many data changes were coalesced into this job by the debounce window.
@@ -113,3 +115,19 @@ class ModelVersion(Base):
             sqlite_where=text("is_active = 1"),
         ),
     )
+
+
+class RetrainingWorker(Base):
+    """Heartbeat of each retraining worker process (scripts/retrain_worker.py).
+
+    Lets the API and dashboard report whether queued jobs will be picked up.
+    """
+    __tablename__ = "retraining_workers"
+
+    worker_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    hostname: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+    # idle | training | stopped
+    state: Mapped[str] = mapped_column(String(20), default="idle")
+    current_job_id: Mapped[int | None] = mapped_column(Integer, nullable=True)

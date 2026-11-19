@@ -1,3 +1,7 @@
+# API runtime — what the FastAPI service needs (this is what Vercel installs).
+# Deliberately excludes PyTorch: inference is a NumPy forward pass and training
+# runs in the retraining worker (requirements-worker.txt). Keeps the serverless
+# bundle well under Vercel's 500 MB Python limit.
 fastapi==0.110.0
 uvicorn[standard]==0.27.1
 sqlalchemy==2.0.27
@@ -12,10 +16,5 @@ passlib[bcrypt]==1.7.4
 bcrypt==4.0.1
 python-multipart==0.0.9
 email-validator==2.1.0
-pandas==2.2.0
 numpy==1.26.4
 scipy==1.12.0
-networkx==3.2.1
-torch==2.2.0
-scikit-learn==1.4.0
-openpyxl==3.1.2

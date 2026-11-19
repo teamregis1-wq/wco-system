@@ -1,0 +1,7 @@
+# Retraining worker (scripts/retrain_worker.py) and local full-stack development:
+# the API dependencies plus PyTorch for training.
+#   Linux servers/containers: install the CPU build to avoid ~2 GB of CUDA packages:
+#     pip install --index-url https://download.pytorch.org/whl/cpu torch==2.2.0
+#     pip install -r requirements-worker.txt
+-r requirements.txt
+torch==2.2.0
