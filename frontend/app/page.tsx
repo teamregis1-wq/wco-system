@@ -6,6 +6,7 @@ import { useAuth } from "@/lib/auth-context";
 import { LogoMark, LogoWordmark } from "@/components/Logo";
 import { brandFont } from "@/lib/fonts";
 import AuthPopover from "@/components/AuthPopover";
+import LandingBackground from "@/components/LandingBackground";
 
 const FEATURES = [
   {
@@ -165,6 +166,9 @@ export default function LandingPage() {
 
   return (
     <main style={S.page}>
+      <LandingBackground />
+      {/* Page content sits above the animated background. */}
+      <div style={{ position: "relative", zIndex: 1 }}>
       {/* ── Top nav ── */}
       <nav style={S.nav}>
         <LogoWordmark size={38} color="white" subtitleColor="rgba(255,255,255,0.55)" />
@@ -288,6 +292,7 @@ export default function LandingPage() {
           Waste Cooking Oil Predictive Mapping System · Batangas City · {new Date().getFullYear()}
         </span>
       </footer>
+    </div>
     </main>
   );
 }
@@ -296,6 +301,8 @@ export default function LandingPage() {
 
 const S: Record<string, React.CSSProperties> = {
   page: {
+    position: "relative",
+    overflowX: "hidden",
     minHeight: "100vh",
     background: "linear-gradient(170deg, #06281e 0%, #0a4a38 42%, #0f6e56 100%)",
     fontFamily: "system-ui, -apple-system, sans-serif",

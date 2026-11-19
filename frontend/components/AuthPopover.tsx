@@ -174,9 +174,6 @@ function RegisterForm({ onRegistered }: { onRegistered: () => void }) {
         onChange={e => setConfirm(e.target.value)}
         placeholder="Repeat password" autoComplete="new-password" required />
 
-      <div style={P.roleNote}>
-        Your account will have <strong>Viewer</strong> access. An admin can upgrade your role later.
-      </div>
 
       {error && <div style={P.errorBox}>{error}</div>}
 
@@ -235,10 +232,5 @@ const P: Record<string, React.CSSProperties> = {
     background: "linear-gradient(135deg,#0f6e56,#0a5240)",
     color: "white", fontWeight: 700, fontSize: 13.5, cursor: "pointer",
     boxShadow: "0 4px 12px rgba(15,110,86,0.3)", fontFamily: "inherit",
-  },
-  roleNote: {
-    marginTop: 12, padding: "9px 11px",
-    background: "#f0fdf4", border: "1px solid #bbf7d0",
-    borderRadius: 9, fontSize: 11.5, color: "#166534", lineHeight: 1.5,
   },
 };

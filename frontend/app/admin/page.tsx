@@ -62,24 +62,170 @@ async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> 
   return res.json();
 }
 
-// ── Role badge ────────────────────────────────────────────────────────────────
+// ── Roles: one definition drives badges, cards, tabs, avatars and the picker ──
 
-const ROLE_STYLE: Record<Role, { bg: string; color: string }> = {
-  admin:      { bg: "#fef3c7", color: "#92400e" },
-  researcher: { bg: "#dbeafe", color: "#1d4ed8" },
-  viewer:     { bg: "#f3f4f6", color: "#374151" },
+const ROLE_META: Record<Role, {
+  label: string; tagline: string; can: string[]; cannot: string;
+  bg: string; color: string; border: string; gradient: string;
+}> = {
+  admin: {
+    label: "Admin", tagline: "Full control of the system",
+    can: ["Manage users and roles", "Delete establishments", "Audit log and retraining", "Everything researchers can do"],
+    cannot: "—",
+    bg: "#fef3c7", color: "#92400e", border: "#fcd34d",
+    gradient: "linear-gradient(135deg, #f59e0b 0%, #d97706 100%)",
+  },
+  researcher: {
+    label: "Researcher", tagline: "Collects and curates the data",
+    can: ["Add and edit establishments", "Enter and import WCO records", "Quality tests and route history", "Retrain the forecast model"],
+    cannot: "Cannot manage users",
+    bg: "#dbeafe", color: "#1d4ed8", border: "#93c5fd",
+    gradient: "linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)",
+  },
+  viewer: {
+    label: "Viewer", tagline: "Read-only access",
+    can: ["Map, hotspots and heat map", "Dashboard and forecasts", "Plan routes (not saved)"],
+    cannot: "Cannot change any data",
+    bg: "#f1f5f9", color: "#334155", border: "#cbd5e1",
+    gradient: "linear-gradient(135deg, #64748b 0%, #334155 100%)",
+  },
 };
 
+const ROLE_ORDER: Role[] = ["admin", "researcher", "viewer"];
+
+function RoleIcon({ role, size = 14, color = "currentColor" }: { role: Role; size?: number; color?: string }) {
+  const p = { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: color,
+              strokeWidth: 2, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+  if (role === "admin") return (
+    <svg {...p}><path d="M12 3l7 3v6c0 4.4-3 7.9-7 9-4-1.1-7-4.6-7-9V6l7-3z" /><path d="M9 12l2 2 4-4" /></svg>
+  );
+  if (role === "researcher") return (
+    <svg {...p}><path d="M9 3h6" /><path d="M10 3v6L5 18a2 2 0 001.7 3h10.6a2 2 0 001.7-3l-5-9V3" /><path d="M7.5 14h9" /></svg>
+  );
+  return (
+    <svg {...p}><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></svg>
+  );
+}
+
 function RoleBadge({ role }: { role: Role }) {
-  const s = ROLE_STYLE[role] ?? ROLE_STYLE.viewer;
+  const m = ROLE_META[role] ?? ROLE_META.viewer;
   return (
     <span style={{
-      fontSize: 11, fontWeight: 700, padding: "3px 9px", borderRadius: 99,
-      background: s.bg, color: s.color, letterSpacing: "0.05em",
+      display: "inline-flex", alignItems: "center", gap: 5,
+      fontSize: 11, fontWeight: 700, padding: "3px 10px 3px 8px", borderRadius: 99,
+      background: m.bg, color: m.color, border: `1px solid ${m.border}`, letterSpacing: "0.04em",
       textTransform: "uppercase",
     }}>
-      {role}
+      <RoleIcon role={role} size={12} />
+      {m.label}
     </span>
+  );
+}
+
+function Avatar({ name, role }: { name: string; role: Role }) {
+  const initials = name.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]?.toUpperCase()).join("") || "?";
+  const m = ROLE_META[role] ?? ROLE_META.viewer;
+  return (
+    <span style={{
+      position: "relative", width: 34, height: 34, borderRadius: "50%", flexShrink: 0,
+      display: "inline-flex", alignItems: "center", justifyContent: "center",
+      background: m.gradient, color: "white", fontSize: 12.5, fontWeight: 800, letterSpacing: "0.02em",
+      boxShadow: "0 2px 6px rgba(15,23,42,0.15)",
+    }}>
+      {initials}
+      <span style={{
+        position: "absolute", right: -3, bottom: -3, width: 16, height: 16, borderRadius: "50%",
+        background: "white", display: "inline-flex", alignItems: "center", justifyContent: "center",
+        boxShadow: "0 1px 3px rgba(15,23,42,0.2)",
+      }}>
+        <RoleIcon role={role} size={10} color={m.color} />
+      </span>
+    </span>
+  );
+}
+
+/** Three role cards that double as filters for the user list. */
+function RoleOverview({ counts, active, onSelect }: {
+  counts: Record<Role, number>; active: Role | "all"; onSelect: (r: Role | "all") => void;
+}) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginBottom: 16 }}>
+      {ROLE_ORDER.map(r => {
+        const m = ROLE_META[r];
+        const on = active === r;
+        return (
+          <button key={r} type="button" onClick={() => onSelect(on ? "all" : r)}
+            style={{
+              textAlign: "left", cursor: "pointer", fontFamily: "inherit",
+              display: "flex", flexDirection: "column", justifyContent: "flex-start", alignItems: "stretch",
+              position: "relative", overflow: "hidden", borderRadius: 14, padding: "14px 16px",
+              background: on ? m.bg : "white",
+              border: `1.5px solid ${on ? m.color : "#e2e8f0"}`,
+              boxShadow: on ? `0 6px 18px ${m.border}66` : "0 1px 2px rgba(0,0,0,0.04)",
+              transition: "all .18s ease",
+            }}>
+            <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 4, background: m.gradient }} />
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+              <span style={{ width: 34, height: 34, borderRadius: 10, background: m.gradient,
+                             display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+                <RoleIcon role={r} size={18} color="white" />
+              </span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 14, fontWeight: 800, color: "#1a202c" }}>{m.label}</div>
+                <div style={{ fontSize: 11, color: "#64748b" }}>{m.tagline}</div>
+              </div>
+              <div style={{ fontSize: 22, fontWeight: 900, color: m.color, fontVariantNumeric: "tabular-nums" }}>
+                {counts[r]}
+              </div>
+            </div>
+            <ul style={{ margin: 0, padding: 0, listStyle: "none", fontSize: 11.5, color: "#475569", lineHeight: 1.7 }}>
+              {m.can.map(c => (
+                <li key={c} style={{ display: "flex", gap: 6 }}>
+                  <span style={{ color: m.color, fontWeight: 900 }}>✓</span>{c}
+                </li>
+              ))}
+              {m.cannot !== "—" && (
+                <li style={{ display: "flex", gap: 6, color: "#94a3b8" }}><span>✕</span>{m.cannot}</li>
+              )}
+            </ul>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Segmented tabs: All / Admin / Researcher / Viewer. */
+function RoleTabs({ counts, total, active, onSelect }: {
+  counts: Record<Role, number>; total: number; active: Role | "all"; onSelect: (r: Role | "all") => void;
+}) {
+  const tabs: (Role | "all")[] = ["all", ...ROLE_ORDER];
+  return (
+    <div role="tablist" style={{ display: "inline-flex", gap: 4, padding: 4, borderRadius: 12,
+                                 background: "#f1f5f9", marginBottom: 12, flexWrap: "wrap" }}>
+      {tabs.map(t => {
+        const on = active === t;
+        const m = t === "all" ? null : ROLE_META[t];
+        return (
+          <button key={t} role="tab" aria-selected={on} type="button" onClick={() => onSelect(t)}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer", fontFamily: "inherit",
+              padding: "6px 14px", borderRadius: 9, border: "none", fontSize: 12.5, fontWeight: 700,
+              background: on ? (m ? m.gradient : "#0f6e56") : "transparent",
+              color: on ? "white" : (m ? m.color : "#334155"),
+              boxShadow: on ? "0 2px 8px rgba(15,23,42,0.15)" : "none", transition: "all .15s ease",
+            }}>
+            {m && <RoleIcon role={t as Role} size={13} />}
+            {m ? m.label : "All users"}
+            <span style={{ fontSize: 11, fontWeight: 800, padding: "0 7px", borderRadius: 99,
+                           background: on ? "rgba(255,255,255,0.25)" : "white",
+                           color: on ? "white" : "#64748b" }}>
+              {t === "all" ? total : counts[t as Role]}
+            </span>
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -151,11 +297,29 @@ function AddUserModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
           </div>
           <div>
             <label style={labelStyle}>Role</label>
-            <select style={inputStyle} value={role} onChange={e => setRole(e.target.value as Role)}>
-              <option value="viewer">Viewer — read-only</option>
-              <option value="researcher">Researcher — can add & edit data</option>
-              <option value="admin">Admin — full access</option>
-            </select>
+            <div role="radiogroup" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+              {ROLE_ORDER.map(r => {
+                const m = ROLE_META[r];
+                const on = role === r;
+                return (
+                  <button key={r} type="button" role="radio" aria-checked={on} onClick={() => setRole(r)}
+                    style={{
+                      cursor: "pointer", fontFamily: "inherit", textAlign: "center", padding: "10px 8px",
+                      display: "flex", flexDirection: "column", justifyContent: "flex-start", alignItems: "center",
+                      borderRadius: 12, border: `1.5px solid ${on ? m.color : "#e2e8f0"}`,
+                      background: on ? m.bg : "white", transition: "all .15s ease",
+                    }}>
+                    <span style={{ width: 30, height: 30, borderRadius: 9, margin: "0 auto 6px",
+                                   display: "flex", alignItems: "center", justifyContent: "center",
+                                   background: on ? m.gradient : "#f1f5f9" }}>
+                      <RoleIcon role={r} size={16} color={on ? "white" : m.color} />
+                    </span>
+                    <div style={{ fontSize: 12.5, fontWeight: 800, color: on ? m.color : "#1a202c" }}>{m.label}</div>
+                    <div style={{ fontSize: 10.5, color: "#64748b", lineHeight: 1.35 }}>{m.tagline}</div>
+                  </button>
+                );
+              })}
+            </div>
           </div>
           {error && (
             <div style={{ padding: "8px 12px", background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, fontSize: 13, color: "#dc2626" }}>
@@ -449,6 +613,7 @@ function AdminDashboard() {
   const [showAdd, setShowAdd] = useState(false);
   const [roleLoading, setRoleLoading] = useState<number | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
+  const [roleFilter, setRoleFilter] = useState<Role | "all">("all");
   const [auditLogs, setAuditLogs] = useState<AuditEntry[]>([]);
   const [auditFilter, setAuditFilter] = useState("");
   const [detailsEntry, setDetailsEntry] = useState<AuditEntry | null>(null);
@@ -499,6 +664,12 @@ function AdminDashboard() {
     }
   }
 
+  const roleCounts = ROLE_ORDER.reduce((acc, r) => {
+    acc[r] = users.filter(u => u.role === r).length;
+    return acc;
+  }, {} as Record<Role, number>);
+  const visibleUsers = roleFilter === "all" ? users : users.filter(u => u.role === roleFilter);
+
   return (
     <PageShell title="Admin Dashboard" subtitle="System overview and user management" maxWidth={1100}>
       <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
@@ -532,6 +703,13 @@ function AdminDashboard() {
           </div>
         )}
 
+        {!loading && (
+          <>
+            <RoleOverview counts={roleCounts} active={roleFilter} onSelect={setRoleFilter} />
+            <RoleTabs counts={roleCounts} total={users.length} active={roleFilter} onSelect={setRoleFilter} />
+          </>
+        )}
+
         {loading ? (
           <div style={{ textAlign: "center", padding: "40px 0", color: "#a0aec0", fontSize: 13 }}>
             Loading…
@@ -541,23 +719,43 @@ function AdminDashboard() {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr style={{ background: "#f8fafc" }}>
-                  {["#", "Name", "Email", "Role", "Joined", "Actions"].map(h => (
+                  {["User", "Role", "Joined", "Actions"].map(h => (
                     <th key={h} style={S.th}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {users.map((u, i) => {
+                {visibleUsers.length === 0 && (
+                  <tr>
+                    <td colSpan={4} style={{ ...S.td, textAlign: "center", padding: "28px 14px", color: "#94a3b8" }}>
+                      {roleFilter === "all" ? "No users yet." : (
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                          <RoleIcon role={roleFilter} size={16} color={ROLE_META[roleFilter].color} />
+                          No {ROLE_META[roleFilter].label.toLowerCase()} accounts yet. Use “+ Add user” to create one.
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                )}
+                {visibleUsers.map((u, i) => {
                   const isSelf = u.id === me?.id;
                   const isDeleting = deleteConfirm === u.id;
                   return (
-                    <tr key={u.id} style={{ background: isSelf ? "#f0fdf4" : i % 2 === 0 ? "white" : "#fafafa" }}>
-                      <td style={S.td}>{u.id}</td>
-                      <td style={{ ...S.td, fontWeight: 600, color: "#1a202c" }}>
-                        {u.full_name}
-                        {isSelf && <span style={{ marginLeft: 6, fontSize: 10, color: "#0f6e56", fontWeight: 700 }}>YOU</span>}
+                    <tr key={u.id} style={{ background: isSelf ? "#f0fdf4" : i % 2 === 0 ? "white" : "#fafafa",
+                                            boxShadow: `inset 3px 0 0 ${(ROLE_META[u.role] ?? ROLE_META.viewer).color}` }}>
+                      <td style={S.td}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                          <Avatar name={u.full_name} role={u.role} />
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontWeight: 700, color: "#1a202c", display: "flex", alignItems: "center", gap: 6 }}>
+                              {u.full_name}
+                              {isSelf && <span style={{ fontSize: 9.5, color: "white", background: "#0f6e56", fontWeight: 800,
+                                                        padding: "1px 6px", borderRadius: 99, letterSpacing: "0.06em" }}>YOU</span>}
+                            </div>
+                            <div style={{ fontSize: 12, color: "#64748b", overflow: "hidden", textOverflow: "ellipsis" }}>{u.email}</div>
+                          </div>
+                        </div>
                       </td>
-                      <td style={{ ...S.td, color: "#4a5568" }}>{u.email}</td>
                       <td style={S.td}>
                         {isSelf ? (
                           <RoleBadge role={u.role} />
@@ -569,15 +767,13 @@ function AdminDashboard() {
                             style={{
                               fontSize: 12, fontWeight: 700, padding: "3px 8px",
                               borderRadius: 8, border: "1px solid #e2e8f0",
-                              background: ROLE_STYLE[u.role]?.bg ?? "#f3f4f6",
-                              color: ROLE_STYLE[u.role]?.color ?? "#374151",
+                              background: ROLE_META[u.role]?.bg ?? "#f3f4f6",
+                              color: ROLE_META[u.role]?.color ?? "#374151",
                               cursor: roleLoading === u.id ? "wait" : "pointer",
                               outline: "none",
                             }}
                           >
-                            <option value="viewer">Viewer</option>
-                            <option value="researcher">Researcher</option>
-                            <option value="admin">Admin</option>
+                            {ROLE_ORDER.map(r => <option key={r} value={r}>{ROLE_META[r].label}</option>)}
                           </select>
                         )}
                       </td>
