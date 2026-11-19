@@ -6,6 +6,7 @@ import { useAuth } from "@/lib/auth-context";
 import { LogoMark, LogoWordmark } from "@/components/Logo";
 import { brandFont } from "@/lib/fonts";
 import AuthPopover from "@/components/AuthPopover";
+import LandingBackground from "@/components/LandingBackground";
 import MiniMapCard from "@/components/MiniMapCard";
 
 const FEATURES = [
@@ -164,8 +165,29 @@ export default function LandingPage() {
     setAuthOpen(true);
   }
 
+  // "Explore Features": the button pulses and its arrow drops, the page glides
+  // down, and the feature cards slide in one after another. Re-pressing replays it.
+  function exploreFeatures(e: React.MouseEvent<HTMLAnchorElement>) {
+    e.preventDefault();
+    const btn = e.currentTarget;
+    const section = document.getElementById("features");
+    if (!section) return;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    section.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+    if (reduce) return;
+    for (const [el, cls] of [[btn, "wco-explore-go"], [section, "wco-features-play"]] as const) {
+      el.classList.remove(cls);
+      void el.offsetWidth; // restart the CSS animation
+      el.classList.add(cls);
+    }
+    window.setTimeout(() => btn.classList.remove("wco-explore-go"), 700);
+  }
+
   return (
     <main style={S.page}>
+      <LandingBackground />
+      {/* Page content sits above the animated background. */}
+      <div style={{ position: "relative", zIndex: 1 }}>
       {/* ── Top nav ── */}
       <nav style={S.nav}>
         <LogoWordmark size={38} color="white" subtitleColor="rgba(255,255,255,0.55)" />
@@ -199,14 +221,7 @@ export default function LandingPage() {
             ? <Link href="/map" style={S.ctaPrimary}>{ctaLabel}</Link>
             : <button onClick={openAuth} style={{ ...S.ctaPrimary, border: "none", cursor: "pointer", fontFamily: "inherit" }}>{ctaLabel}</button>
           }
-          <a
-            href="#features"
-            style={S.ctaGhost}
-            onClick={e => {
-              e.preventDefault();
-              document.getElementById("features")?.scrollIntoView({ behavior: "smooth", block: "start" });
-            }}
-          >
+          <a href="#features" className="wco-explore" style={S.ctaGhost} onClick={exploreFeatures}>
             Explore Features <span className="wco-scroll-arrow" style={{ display: "inline-block", marginLeft: 4 }}>↓</span>
           </a>
           <style>{`
@@ -215,6 +230,47 @@ export default function LandingPage() {
               50%      { transform: translateY(4px); }
             }
             .wco-scroll-arrow { animation: wco-bounce 1.6s ease-in-out infinite; }
+            .wco-explore { transition: transform 0.15s ease, background 0.2s ease, border-color 0.2s ease; }
+            .wco-explore:hover { background: rgba(255,255,255,0.14) !important; border-color: rgba(94,234,212,0.55) !important; }
+            .wco-explore:active { transform: scale(0.96); }
+            @keyframes wco-explore-ring {
+              0%   { box-shadow: 0 0 0 0 rgba(94,234,212,0.55); }
+              100% { box-shadow: 0 0 0 20px rgba(94,234,212,0); }
+            }
+            @keyframes wco-arrow-drop {
+              0%   { transform: translateY(0);     opacity: 1; }
+              45%  { transform: translateY(16px);  opacity: 0; }
+              46%  { transform: translateY(-12px); opacity: 0; }
+              100% { transform: translateY(0);     opacity: 1; }
+            }
+            .wco-explore-go { animation: wco-explore-ring 0.65s ease-out; }
+            .wco-explore-go .wco-scroll-arrow { animation: wco-arrow-drop 0.6s ease-in-out; }
+
+            @keyframes wco-feat-in {
+              from { opacity: 0; transform: translateY(30px) scale(0.97); }
+              to   { opacity: 1; transform: none; }
+            }
+            @keyframes wco-feat-glow {
+              40% { box-shadow: 0 0 0 1px rgba(94,234,212,0.55), 0 14px 44px rgba(94,234,212,0.22); }
+            }
+            @keyframes wco-icon-pop {
+              0%   { transform: scale(0.6) rotate(-12deg); }
+              60%  { transform: scale(1.12) rotate(3deg); }
+              100% { transform: none; }
+            }
+            .wco-features-play .wco-feat-head { animation: wco-feat-in 0.6s cubic-bezier(.2,.8,.2,1) 0.2s both; }
+            .wco-features-play .wco-feat-card {
+              animation: wco-feat-in 0.65s cubic-bezier(.2,.8,.2,1) both, wco-feat-glow 1.5s ease-out;
+              animation-delay: calc(0.35s + var(--i) * 0.09s);
+            }
+            .wco-features-play .wco-feat-card .wco-feat-icon {
+              animation: wco-icon-pop 0.55s cubic-bezier(.2,.8,.2,1) both;
+              animation-delay: calc(0.55s + var(--i) * 0.09s);
+            }
+            @media (prefers-reduced-motion: reduce) {
+              .wco-scroll-arrow, .wco-explore-go, .wco-features-play .wco-feat-head,
+              .wco-features-play .wco-feat-card, .wco-features-play .wco-feat-icon { animation: none !important; }
+            }
           `}</style>
         </div>
 
@@ -239,14 +295,16 @@ export default function LandingPage() {
 
       {/* ── Features ── */}
       <section id="features" style={S.section}>
-        <h2 className={brandFont.className} style={S.sectionTitle}>Everything the collection program needs</h2>
-        <p style={S.sectionSub}>
-          From the first field record to the truck's final stop — one system, one map.
-        </p>
+        <div className="wco-feat-head">
+          <h2 className={brandFont.className} style={S.sectionTitle}>Everything the collection program needs</h2>
+          <p style={S.sectionSub}>
+            From the first field record to the truck's final stop — one system, one map.
+          </p>
+        </div>
         <div style={S.grid}>
-          {FEATURES.map(f => (
-            <div key={f.title} style={S.card}>
-              <div style={S.cardIcon}><FeatureIcon name={f.icon} /></div>
+          {FEATURES.map((f, i) => (
+            <div key={f.title} className="wco-feat-card" style={{ ...S.card, ["--i" as string]: i } as React.CSSProperties}>
+              <div className="wco-feat-icon" style={S.cardIcon}><FeatureIcon name={f.icon} /></div>
               <div style={S.cardTitle}>{f.title}</div>
               <div style={S.cardText}>{f.text}</div>
             </div>
@@ -292,6 +350,7 @@ export default function LandingPage() {
           Waste Cooking Oil Predictive Mapping System · Batangas City · {new Date().getFullYear()}
         </span>
       </footer>
+    </div>
     </main>
   );
 }
