@@ -59,7 +59,7 @@ Shortly before the meeting, run `load_demo_data --extend-existing --commit` if a
 | Badge stays at "retraining scheduled" | The worker isn't running: start `python -m scripts.retrain_worker`. The queued job runs immediately. |
 | Training slow | Normal on a laptop is 10–20 s for 6,240 records. The status panel shows progress; the old model keeps serving meanwhile. |
 | Training failed | The panel shows the error and that the previous model is still active, which is the intended rollback behaviour. Common cause: too little history (< ~35 weeks). |
-| Forecast says "needs 12 consecutive weekly records" | That establishment has a gap of > 2 weeks or too little data; pick another or fill the gap. |
+| Forecast says it needs records "spanning at least 12 weeks" or "in at least 8 of the last 12 weeks" | That establishment is too new or has more than 4 missing weeks recently; pick another or add the missing weeks. Up to 4 missing weeks are filled in automatically (shown as a warning). |
 | Forecast warning "may already be in the past" | Data end long ago; run `load_demo_data --extend-existing --commit` beforehand. |
 | OSRM down | The route still computes with straight-line distances and a warning. |
 | Port in use | `--port 8001` and update `NEXT_PUBLIC_API_BASE`. |

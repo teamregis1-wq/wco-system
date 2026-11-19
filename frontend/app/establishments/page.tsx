@@ -1083,17 +1083,19 @@ function EstablishmentDetailModal({
   const [historical,   setHistorical]   = useState<WCORecord[]>([]);
   const [fcLoading,    setFcLoading]    = useState(true);
   const [fcError,      setFcError]      = useState<string | null>(null);
+  const [fcWarnings,   setFcWarnings]   = useState<string[]>([]);
   const [trainMeta,    setTrainMeta]    = useState<{ model_version: string | null; mae: number | null; rmse: number | null; r2: number | null } | null>(null);
 
   useEffect(() => {
-    setFcLoading(true); setFcError(null);
+    setFcLoading(true); setFcError(null); setFcWarnings([]);
     Promise.all([
-      apiFetch<{ points: ForecastPoint[]; model_version?: string }>(`/forecast/${e.id}?horizon_weeks=13`),
+      apiFetch<{ points: ForecastPoint[]; model_version?: string; warnings?: string[] }>(`/forecast/${e.id}?horizon_weeks=13`),
       apiFetch<WCORecord[]>(`/wco/records?establishment_id=${e.id}`),
       apiFetch<{ model_version: string | null; metrics: { mae: number; rmse: number; r2: number } | null }>("/forecast/training-status").catch(() => null),
     ])
       .then(([fc, recs, ts]) => {
         setFcPoints(fc.points);
+        setFcWarnings(fc.warnings ?? []);
         setHistorical(recs);
         if (ts) setTrainMeta({ model_version: ts.model_version, mae: ts.metrics?.mae ?? null, rmse: ts.metrics?.rmse ?? null, r2: ts.metrics?.r2 ?? null });
       })
@@ -1200,6 +1202,11 @@ function EstablishmentDetailModal({
           ) : fcPoints ? (
             <ForecastChart points={fcPoints} historical={historical} />
           ) : null}
+          {!fcLoading && !fcError && fcWarnings.length > 0 && (
+            <div style={{ marginTop: 10, padding: "8px 12px", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, fontSize: 11.5, lineHeight: 1.5, color: "#92400e" }}>
+              {fcWarnings.map(w => <div key={w}>⚠ {w}</div>)}
+            </div>
+          )}
         </div>
       </div>
     </div>

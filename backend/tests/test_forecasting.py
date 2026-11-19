@@ -125,34 +125,59 @@ def test_recursive_forecast_feeds_back_predictions():
 # ── Input window for inference ───────────────────────────────────────────────
 
 def test_trailing_window_rules():
+    assert D0.weekday() == 0
     rows = [(D0 + timedelta(weeks=w), float(w)) for w in range(20)]
     values, origin = trailing_window(rows, min_weeks=12)
     assert len(values) == 12 and values[-1] == 19.0 and origin == rows[-1][0]
 
     with pytest.raises(InsufficientHistoryError, match="no WCO records"):
         trailing_window([], 12)
-    with pytest.raises(InsufficientHistoryError, match="has 5"):
+    # History shorter than 12 weeks is refused (the error roughly doubles).
+    with pytest.raises(InsufficientHistoryError, match="span 5 week"):
         trailing_window(rows[:5], 12)
-    # 3 missing weeks inside the window → too long to interpolate
-    gap = rows[:15] + [(rows[14][0] + timedelta(weeks=4), 1.0)]
-    with pytest.raises(InsufficientHistoryError, match="3 missing week"):
-        trailing_window(gap, 12)
-    odd = rows[:15] + [(rows[14][0] + timedelta(days=9), 1.0)]
-    with pytest.raises(InsufficientHistoryError, match="irregular"):
-        trailing_window(odd, 12)
-    # An off-schedule (non-Monday) record is named so the user can fix it.
-    assert D0.weekday() == 0
-    stray = rows[:15] + [(rows[14][0] + timedelta(days=1), 400.0), (rows[15][0], 15.0)]
-    with pytest.raises(InsufficientHistoryError, match=r"record dated .* \(Tuesday\) is off the Monday-start"):
-        trailing_window(stray, 12)
+    with pytest.raises(InsufficientHistoryError, match="span 11 week"):
+        trailing_window(rows[:11], 12)
 
 
-def test_short_gap_is_interpolated_for_inference_only():
-    rows = [(D0 + timedelta(weeks=w), float(w)) for w in range(20) if w != 17]
+def test_non_consecutive_weeks_are_accepted_up_to_four_missing():
+    # 4 of the last 12 weeks missing (8 observed) → forecast, with the gaps filled.
+    keep = [w for w in range(20) if w not in (9, 12, 13, 17)]
+    rows = [(D0 + timedelta(weeks=w), float(w)) for w in keep]
     warnings: list[str] = []
     values, origin = trailing_window(rows, min_weeks=12, warnings=warnings)
-    assert values.tolist() == [float(w) for w in range(8, 20)]   # week 17 filled linearly
-    assert warnings and "interpolated" in warnings[0]
+    assert values.tolist() == [float(w) for w in range(8, 20)]     # linear series restored exactly
+    assert origin == D0 + timedelta(weeks=19)
+    assert warnings and "4 of the 12 input weeks had no record" in warnings[0]
+
+    # Leading weeks of the window are interpolated from a record BEFORE the window.
+    rows = [(D0 + timedelta(weeks=w), float(w)) for w in [0, 1, 2, 3] + list(range(12, 20))]
+    values, _ = trailing_window(rows, min_weeks=12)
+    assert values.tolist() == [float(w) for w in range(8, 20)]
+
+    # 5 missing (7 observed) → refused with the count.
+    keep = [w for w in range(20) if w not in (9, 11, 12, 13, 17)]
+    with pytest.raises(InsufficientHistoryError, match="at least 8 of the last 12 weeks.*has 7"):
+        trailing_window([(D0 + timedelta(weeks=w), float(w)) for w in keep], 12)
+
+
+def test_off_schedule_record_does_not_break_the_series():
+    rows = [(D0 + timedelta(weeks=w), float(w)) for w in range(20)]
+    # A Tuesday entry in a week that already has its Monday record is ignored (and named).
+    stray = sorted(rows + [(rows[15][0] + timedelta(days=1), 400.0)])
+    warnings: list[str] = []
+    values, _ = trailing_window(stray, 12, warnings=warnings)
+    assert values.tolist() == [float(w) for w in range(8, 20)]
+    assert any("Ignored 1 record" in w and str(rows[15][0] + timedelta(days=1)) in w for w in warnings)
+    # A Sunday entry for a week with no Monday record counts toward the next Monday.
+    sunday = [r for r in rows if r[0] != rows[16][0]] + [(rows[16][0] - timedelta(days=1), 16.0)]
+    warnings = []
+    values, _ = trailing_window(sorted(sunday), 12, warnings=warnings)
+    assert values.tolist() == [float(w) for w in range(8, 20)]
+    assert any("nearest Monday-start week" in w for w in warnings)
+
+
+def test_interpolation_is_for_inference_only():
+    rows = [(D0 + timedelta(weeks=w), float(w)) for w in range(20) if w != 17]
     # Training never bridges the gap.
     segs, report = segment_series([Observation(1, d, v) for d, v in rows], 12)
     assert report["missing_weeks"] == 1 and all(len(s.values) <= 17 for s in segs)
@@ -301,7 +326,7 @@ def test_new_establishment_with_short_history_gets_clear_422(client, researcher_
     _train(scheduler)
     newbie = make_establishment(db, code="NEW1")
     r = client.get(f"{API}/forecast/{newbie.id}", headers=researcher_headers)
-    assert r.status_code == 422 and "consecutive weekly records" in r.json()["detail"]
+    assert r.status_code == 422 and "spanning at least 12 weeks" in r.json()["detail"]
     assert client.get(f"{API}/forecast/987654", headers=researcher_headers).status_code == 404
 
 

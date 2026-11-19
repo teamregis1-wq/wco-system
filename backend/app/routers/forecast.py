@@ -60,7 +60,8 @@ def aggregate_forecast(
 ):
     """Aggregate forecasted WCO supply across all active establishments.
 
-    Establishments without 12 consecutive recent weeks are skipped; the
+    Establishments whose records span < 12 weeks or that have records in fewer
+    than 8 of the last 12 weeks are skipped; the
     counts are reported in the X-Forecast-Included / X-Forecast-Skipped headers.
     """
     try:

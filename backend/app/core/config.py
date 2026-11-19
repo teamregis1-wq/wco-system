@@ -129,9 +129,14 @@ class Settings(BaseSettings):
     # before them are used only for early stopping.
     ml_test_weeks: int = 16
     ml_val_weeks: int = 6
-    # Minimum consecutive weekly records an establishment needs before the
-    # API will produce a forecast for it (the LSTM input window is 12 weeks).
+    # An establishment's records must span at least this many weeks before the
+    # API forecasts for it (the LSTM input window is 12 weeks; shorter histories
+    # roughly double the error, see docs/ML_TRAINING_AND_EVALUATION.md).
     ml_min_history_weeks: int = 12
+    # Weeks need not be consecutive: at least this many of the last 12 weeks must
+    # have a record; the rest are interpolated from neighbouring records for the
+    # forecast input only (8 of 12 kept 1-week-ahead MAE within ~10% of complete data).
+    ml_min_observed_weeks: int = 8
     # Serve the bundled pre-audit model until the first model is trained.
     ml_bundled_fallback: bool = True
 

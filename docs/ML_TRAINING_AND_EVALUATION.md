@@ -120,10 +120,27 @@ seasonal naive 3.73 L and naive 9.87 L.
 ## 6. Inference rules
 
 - The active model is loaded once per worker and swapped atomically when a new version is activated.
-- An establishment needs **12 consecutive weekly records** (`ML_MIN_HISTORY_WEEKS`). Up to **2 missing
-  weeks** inside the 12-week input are linearly interpolated *for the forecast only* and reported in
-  `warnings`. Longer gaps, irregular intervals or duplicates → HTTP 422 with the exact reason. Training
-  never uses interpolated values.
+- **Forecast input rule (weeks need not be consecutive).** The model reads the 12 Monday-start weeks
+  ending at the establishment's latest record. Its records must **span at least 12 weeks**
+  (`ML_MIN_HISTORY_WEEKS`) and **at least 8 of those 12 weeks must have a record**
+  (`ML_MIN_OBSERVED_WEEKS`). Missing weeks are linearly interpolated from the neighbouring records
+  (which may precede the window) *for the forecast input only* and listed in `warnings`; otherwise
+  HTTP 422 with the exact reason. Training never uses interpolated values.
+- **Why these thresholds** (active model, 1-week-ahead, 16 held-out test weeks, 120 establishments,
+  1,920 forecasts; MAE with all 12 weeks = 2.69 L; repeating last week = 4.14 L):
+
+  | Input condition | MAE (L) | vs. complete |
+  |---|---|---|
+  | 10 of 12 weeks recorded, gaps interpolated | 2.74 | +2% |
+  | 8 of 12 weeks recorded, gaps interpolated | 2.83 | +5% |
+  | 6 of 12 weeks recorded (gaps, edge-held) | 3.31 | +23% |
+  | Only 10 weeks of history (front padded) | 3.45 | +29% |
+  | Only 8 weeks of history (front padded) | 5.42 | +102% — worse than repeating last week |
+  | Only 8 weeks fed as a shorter sequence | 14.04 | +423% |
+
+  Gaps inside a 12-week span cost little; a history shorter than 12 weeks does not, because the model
+  relies on the early weeks of its window. Hence: gaps allowed (≥ 8 of 12), minimum span kept at 12.
+  Numbers are from synthetic data and should be re-measured on observed data.
 - Collection weeks run **Monday to Sunday**, so `week_date` must be a Monday. The API (single, edit
   and bulk), the CSV importer and the entry form enforce this; the form snaps any picked day to its
   week's Monday. A record off that schedule would fall between two regular weeks and break the series.
@@ -199,7 +216,7 @@ data validation → chronological split → train → held-out evaluation
 
 **Configuration:** `AUTO_RETRAIN_ENABLED`, `RETRAIN_DEBOUNCE_SECONDS`, `RETRAIN_POLL_SECONDS`,
 `ML_RANDOM_SEED`, `ML_MAX_EPOCHS`, `ML_PATIENCE`, `ML_TEST_WEEKS` (≥ 13), `ML_VAL_WEEKS`,
-`ML_MIN_HISTORY_WEEKS`, `MODEL_ARTIFACT_DIR`, `RETRAIN_EXECUTOR`, `RETRAIN_MAX_ATTEMPTS`,
+`ML_MIN_HISTORY_WEEKS`, `ML_MIN_OBSERVED_WEEKS`, `MODEL_ARTIFACT_DIR`, `RETRAIN_EXECUTOR`, `RETRAIN_MAX_ATTEMPTS`,
 `WORKER_POLL_SECONDS`, `WORKER_HEARTBEAT_SECONDS`. A dataset needs roughly 12 + 1 + 6 + 16 = **35+ consecutive weeks** per
 series for the default split; with less, the job fails with an explanatory message and the previous model stays active.
 

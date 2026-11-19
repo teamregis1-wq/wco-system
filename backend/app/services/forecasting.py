@@ -5,12 +5,15 @@ Training lives in ``app.services.training`` (pure pipeline) and
 definition, sequence length, and recursive forecasting function are shared
 with training, so inference is exactly what the backtest evaluated.
 
-Input window rule: the model reads the most recent SEQUENCE_LENGTH (12)
-weekly values of an establishment. Up to 2 consecutive missing weeks are
-linearly interpolated for the input (and reported as a warning); a longer
-gap, an irregular interval, or a duplicate week makes the input ill-defined,
-so the API declines to forecast (HTTP 422 with an explanation) rather than
-guess. Training never uses interpolated values.
+Input window rule: the model reads 12 weekly values — the 12 Monday-start
+weeks ending at the establishment's latest record. Weeks need not be
+consecutive. The records must span at least MIN_HISTORY_WEEKS (12) weeks and
+at least MIN_OBSERVED_WEEKS (8) of those 12 weeks must have a record; missing
+weeks are linearly interpolated from the neighbouring records (which may lie
+before the window) for the forecast INPUT only, and reported in `warnings`.
+A legacy record dated on another weekday counts toward its nearest Monday-start
+week unless that week already has a Monday record. Training never uses
+interpolated values.
 """
 from __future__ import annotations
 
@@ -37,67 +40,79 @@ class InsufficientHistoryError(ValueError):
     pass
 
 
-MAX_INTERPOLATED_GAP_WEEKS = 2   # inference only; training never uses filled values
+MIN_OBSERVED_WEEKS = min(SEQUENCE_LENGTH, max(1, settings.ml_min_observed_weeks))
+
+
+def _nearest_monday(d: date) -> date:
+    """The Monday-start week a record mostly covers (Tue–Thu → back, Fri–Sun → ahead)."""
+    off = d.weekday()
+    return d - timedelta(days=off) if off <= 3 else d + timedelta(days=7 - off)
 
 
 def trailing_window(rows: list[tuple[date, float]], min_weeks: int = MIN_HISTORY_WEEKS,
-                    warnings: list[str] | None = None):
-    """Return (last SEQUENCE_LENGTH weekly values, origin date) for inference.
+                    warnings: list[str] | None = None,
+                    min_observed: int = MIN_OBSERVED_WEEKS):
+    """Return (12 weekly input values, origin week) for inference.
 
-    Walks back from the latest record over exactly-weekly steps. A short gap
-    (at most MAX_INTERPOLATED_GAP_WEEKS missing weeks) is filled by linear
-    interpolation — for the forecast INPUT only — and reported in `warnings`.
-    A longer gap, an irregular interval, or a duplicate week ends the run.
+    `rows` are (week_date, litres). See the module docstring for the rule.
     Raises InsufficientHistoryError with a human-readable reason when the
-    usable run is shorter than `min_weeks`.
+    history is too short or too sparse to forecast responsibly.
     """
     if not rows:
         raise InsufficientHistoryError(
-            "This establishment has no WCO records yet. Add at least "
-            f"{min_weeks} consecutive weekly records to enable forecasting.")
-    filled: list[tuple[date, float]] = [rows[-1]]   # newest first
-    break_reason = None
-    interpolated: list[date] = []
-    i = len(rows) - 1
-    while i > 0 and len(filled) < max(min_weeks, SEQUENCE_LENGTH):
-        (d0, v0), (d1, v1) = rows[i - 1], rows[i]
-        delta = (d1 - d0).days
-        if delta == 7:
-            filled.append((d0, v0))
-        elif delta % 7 == 0 and 0 < delta // 7 - 1 <= MAX_INTERPOLATED_GAP_WEEKS:
-            k = delta // 7
-            for j in range(k - 1, 0, -1):            # missing weeks, newest first
-                filled.append((d0 + timedelta(weeks=j), v0 + (v1 - v0) * j / k))
-                interpolated.append(d0 + timedelta(weeks=j))
-            filled.append((d0, v0))
+            "This establishment has no WCO records yet. Forecasting needs records spanning "
+            f"at least {min_weeks} weeks, with at least {min_observed} of the last "
+            f"{SEQUENCE_LENGTH} weeks recorded.")
+
+    # One value per Monday-start week; a Monday-dated record always wins.
+    weekly: dict[date, float] = {d: v for d, v in rows if d.weekday() == 0}
+    stray_used, stray_ignored = [], []
+    for d, v in sorted((d, v) for d, v in rows if d.weekday() != 0):
+        wk = _nearest_monday(d)
+        if wk in weekly:
+            stray_ignored.append(d)
         else:
-            if delta == 0:
-                break_reason = f"duplicate record for week {d1}"
-            elif delta % 7 == 0:
-                break_reason = f"{delta // 7 - 1} missing week(s) between {d0} and {d1}"
-            else:
-                break_reason = f"irregular {delta}-day interval between {d0} and {d1}"
-                off = [d for d in (d0, d1) if d.weekday() != 0]
-                if len(off) == 1:
-                    break_reason += (f"; the record dated {off[0]} ({off[0]:%A}) is off the "
-                                     "Monday-start weekly schedule, so edit or delete it")
-            break
-        i -= 1
-    run = list(reversed(filled))
-    if len(run) < min_weeks:
-        msg = (f"Forecasting needs at least {min_weeks} consecutive weekly records; "
-               f"the most recent consecutive run has {len(run)} (ending {rows[-1][0]}).")
-        if break_reason:
-            msg += f" The run is broken by {break_reason}."
-        raise InsufficientHistoryError(msg)
-    window = run[-SEQUENCE_LENGTH:]
-    used = [d for d in interpolated if d >= window[0][0]]
-    if used and warnings is not None:
-        warnings.append(
-            f"{len(used)} missing week(s) in the 12-week input ({', '.join(map(str, sorted(used)))}) "
-            "were linearly interpolated for this forecast only.")
-    values = np.array([v for _, v in window], dtype=np.float64)
-    return values, rows[-1][0]
+            weekly[wk] = v
+            stray_used.append(d)
+    weeks = sorted(weekly)
+    origin = weeks[-1]
+    window_weeks = [origin - timedelta(weeks=SEQUENCE_LENGTH - 1 - i) for i in range(SEQUENCE_LENGTH)]
+    span = (origin - weeks[0]).days // 7 + 1
+    observed = sum(1 for w in window_weeks if w in weekly)
+
+    if span < min_weeks:
+        raise InsufficientHistoryError(
+            f"Forecasting needs records spanning at least {min_weeks} weeks; this establishment's "
+            f"records span {span} week(s) ({weeks[0]} to {origin}). With a shorter history the "
+            "forecast error roughly doubles, so the system waits for more weeks.")
+    if observed < min_observed:
+        raise InsufficientHistoryError(
+            f"Forecasting needs records in at least {min_observed} of the last {SEQUENCE_LENGTH} "
+            f"weeks ({window_weeks[0]} to {origin}); this establishment has {observed}. "
+            "Add the missing weekly records to enable forecasting.")
+
+    # Interpolate missing weeks from all records (the left anchor may precede the window).
+    x = np.array([w.toordinal() for w in weeks], dtype=np.float64)
+    y = np.array([weekly[w] for w in weeks], dtype=np.float64)
+    values = np.interp([w.toordinal() for w in window_weeks], x, y)
+
+    if warnings is not None:
+        missing = [w for w in window_weeks if w not in weekly]
+        if missing:
+            warnings.append(
+                f"{len(missing)} of the {SEQUENCE_LENGTH} input weeks had no record "
+                f"({', '.join(map(str, missing))}); they were estimated from neighbouring weeks "
+                "for this forecast only.")
+        if stray_ignored:
+            warnings.append(
+                f"Ignored {len(stray_ignored)} record(s) not dated on a Monday "
+                f"({', '.join(map(str, stray_ignored))}) because that week already has a "
+                "Monday record; edit or delete them.")
+        if stray_used:
+            warnings.append(
+                f"{len(stray_used)} record(s) not dated on a Monday ({', '.join(map(str, stray_used))}) "
+                "were counted toward their nearest Monday-start week.")
+    return values, origin
 
 
 def _staleness_warning(origin: date) -> list[str]:
