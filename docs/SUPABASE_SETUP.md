@@ -16,8 +16,9 @@ using the existing Alembic migrations. Nothing here touches the old `hotspotapp`
 ## 1. Create the project
 
 1. Sign in with the thesis Google account → **New project**.
-2. Region: **Southeast Asia (Singapore)**, the closest to Batangas City. Use the same region later for
-   Vercel Functions (`sin1`) to keep API → database latency low.
+2. Region: Singapore (`ap-southeast-1`) is the closest to Batangas City. The WCO Atlas project was created in
+   **Sydney (`ap-southeast-2`)**, which works fine. Either way, set Vercel Functions to the matching region
+   (`syd1` for Sydney, `sin1` for Singapore) to keep API → database latency low.
 3. Save the database password in a password manager.
 
 ## 2. Enable PostGIS (before running migrations)
@@ -36,7 +37,9 @@ Click **Connect** at the top of the project page:
 | Local API, migrations, scripts, tests, **retraining worker** | **Session pooler** | 5432 | `backend/.env` → `DATABASE_URL` (worker on Vercel: `WORKER_DATABASE_URL`) |
 | **Vercel API functions** (serverless) | **Transaction pooler** | 6543 | Vercel env → `DATABASE_URL` |
 
-Format: `postgresql://postgres.<project-ref>:<password>@aws-0-ap-southeast-1.pooler.supabase.com:<port>/postgres`
+Format: `postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:<port>/postgres`
+(the WCO Atlas project uses `aws-0-ap-southeast-2…`; the Session and Transaction poolers share that host
+and differ only in the port: 5432 vs 6543).
 
 - The **direct** host `db.<project-ref>.supabase.co` is **IPv6-only** (no IPv4 address). Vercel functions and many
   networks cannot reach it, so use the pooler strings above.
@@ -114,8 +117,13 @@ TEST_DATABASE_URL="<session-pooler-url>" TEST_TRANSACTION_POOLER_URL="<transacti
 TEST_DATABASE_URL="<session-pooler-url>" ./venv/bin/python -m pytest
 ```
 
-The full-suite run creates its tables in the `wco_test` schema (never `public`), truncates them between
-tests, uses a separate advisory-lock key, and drops the schema at the end.
+The full-suite run creates its tables in the `wco_test` schema, truncates them between tests, uses a
+separate advisory-lock key, and drops the schema at the end. `public` is protected three ways:
+- every statement is explicitly qualified with `wco_test`
+- the test connections' `search_path` excludes `public`
+- a tripwire compares `public`'s tables and row counts before and after the run, and fails if anything changed
+
+Even so, run it before loading data you care about, or after a backup.
 
 ## 9. Backups
 

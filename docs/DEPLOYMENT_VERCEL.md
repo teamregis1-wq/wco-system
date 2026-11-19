@@ -103,7 +103,7 @@ Vercel Daemon configuration (add to `vercel.json` only if you choose option B):
   "retrain_worker": {
     "root": "backend",
     "entrypoint": "worker.Dockerfile",
-    "instances": { "sin1": 1 },
+    "instances": { "syd1": 1 },
     "resources": { "requests": { "memory": "2Gi" } },
     "terminationGracePeriodSeconds": 300
   }
@@ -134,7 +134,8 @@ Never set Supabase anon/service keys in the frontend; the app doesn't use them.
    root** (leave it empty). With `vercel.json` services at the root, Vercel detects both services.
 3. **Settings → Environment Variables**: set the table above for *Production* and *Preview*; remove the
    old `NEXT_PUBLIC_API_BASE`.
-4. **Settings → Functions → Region**: `sin1` (Singapore), the same region as Supabase.
+4. **Settings → Functions → Region**: the Vercel region matching your Supabase region. The WCO Atlas
+   project is in **ap-southeast-2 (Sydney)**, so use `syd1`. (A Singapore project would use `sin1`.)
 5. Deploy (push to the production branch, or *Redeploy*). Migrations are **not** run by the deployment;
    run `alembic upgrade head` locally first (SUPABASE_SETUP.md §4).
 6. Start a worker (option A, B or C).
