@@ -58,6 +58,12 @@ body { color: #1a1a1a; background: #fff; -webkit-text-size-adjust: 100%; }
 .wco-dash-printing .pdf-g3,
 .wco-dash-printing .pdf-g5 { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
 
+/* ── Off-screen print copies: PDFs are drawn from these, never from the
+      on-screen maps, so nothing visibly resizes during export. ───────────── */
+.wco-print-sheet { position: fixed; left: -10000px; top: 0; width: 7.27in; background: #fff;
+                   color: #1a202c; pointer-events: none; }
+.wco-print-copy  { position: fixed; left: -10000px; top: 0; width: 6.27in; pointer-events: none; }
+
 /* ── Print / PDF: glass becomes crisp white cards ───────────────────────── */
 @media print {
   .wco-app-bg { background: #fff !important; }
@@ -67,4 +73,10 @@ body { color: #1a1a1a; background: #fff; -webkit-text-size-adjust: 100%; }
     border: 1px solid #dfe7e3 !important;
   }
   .wco-noprint { display: none !important; }
+  /* Hotspot map PDF: print only the prepared A4 sheet. */
+  body.wco-sheet-printing > *:not(.wco-print-sheet) { display: none !important; }
+  body.wco-sheet-printing .wco-print-sheet { position: static !important; left: auto !important; }
+  .wco-print-sheet, .wco-print-sheet * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+  /* Route PDF: the print-sized copy takes the on-screen map's place in the flow. */
+  .wco-print-copy { position: static !important; left: auto !important; width: 100% !important; }
 }

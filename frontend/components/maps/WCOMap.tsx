@@ -9,7 +9,6 @@
  *   - Right panel: legend, city summary, top-10 hotspot list, forecast chart
  */
 
-import type { LatLng } from "leaflet";
 import { useEffect, useState, useRef, useMemo } from "react";
 import {
   MapContainer, TileLayer, CircleMarker, ImageOverlay, Tooltip, useMap, useMapEvents,
@@ -17,6 +16,8 @@ import {
 import "leaflet/dist/leaflet.css";
 import { API_BASE, getToken } from "@/lib/api";
 import ForecastChart from "@/components/forecast/ForecastChart";
+import PrintMapSheet, { type LegendItem } from "@/components/maps/PrintMapSheet";
+import { printWhenReady, deferred } from "@/lib/print";
 import type { ForecastPoint } from "@/lib/api";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -99,6 +100,19 @@ function zRadius(z: number): number {
   if (a >= 0.500) return  7;
   return 5;
 }
+
+// Legend for the exported PDF (same colours and sizes as the map markers).
+const PRINT_LEGEND: LegendItem[] = [
+  { color: "#c53030", size: 14, label: "Hotspot, p < 0.01 (z ≥ 2.576)" },
+  { color: "#e53e3e", size: 12, label: "Hotspot, p < 0.05 (z ≥ 1.96)" },
+  { color: "#ed8936", size: 10, label: "Trending hot (z ≥ 1.2)" },
+  { color: "#f6ad55", size: 8,  label: "Mild positive (z ≥ 0.5)" },
+  { color: "#a0aec0", size: 7,  label: "No pattern (|z| < 0.5)" },
+  { color: "#90cdf4", size: 8,  label: "Mild negative (z ≤ −0.5)" },
+  { color: "#4299e1", size: 10, label: "Trending cold (z ≤ −1.2)" },
+  { color: "#2b6cb0", size: 12, label: "Coldspot, p < 0.05 (z ≤ −1.96)" },
+  { color: "#1a365d", size: 14, label: "Coldspot, p < 0.01 (z ≤ −2.576)" },
+];
 
 const CAT_LABEL: Record<string, string> = {
   high:     "High (p < 0.01)",
@@ -196,32 +210,6 @@ async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> 
 
 // ── Map helpers ───────────────────────────────────────────────────────────────
 
-/** For PDF export: on "wco:print-prepare" re-measure the (temporarily print-sized)
- *  map and fit every establishment; on "wco:print-done" restore the previous view. */
-function PrintFit({ hotspots }: { hotspots: GiHotspot[] }) {
-  const map = useMap();
-  useEffect(() => {
-    let saved: { c: LatLng; z: number } | null = null;
-    const prepare = () => {
-      saved = { c: map.getCenter(), z: map.getZoom() };
-      map.invalidateSize({ animate: false });
-      if (hotspots.length) {
-        const lats = hotspots.map(h => h.latitude), lngs = hotspots.map(h => h.longitude);
-        map.fitBounds([[Math.min(...lats) - 0.002, Math.min(...lngs) - 0.002],
-                       [Math.max(...lats) + 0.002, Math.max(...lngs) + 0.002]], { padding: [24, 24], animate: false });
-      }
-    };
-    const done = () => {
-      map.invalidateSize({ animate: false });
-      if (saved) map.setView(saved.c, saved.z, { animate: false });
-    };
-    window.addEventListener("wco:print-prepare", prepare);
-    window.addEventListener("wco:print-done", done);
-    return () => { window.removeEventListener("wco:print-prepare", prepare); window.removeEventListener("wco:print-done", done); };
-  }, [map, hotspots]);
-  return null;
-}
-
 function FitBounds({ hotspots }: { hotspots: GiHotspot[] }) {
   const map = useMap();
   useEffect(() => {
@@ -312,6 +300,8 @@ export default function WCOMap() {
   const [sidebarOpen,  setSidebarOpen]  = useState(true);
   const [resetTick,    setResetTick]    = useState(0);
   const [refreshKey,   setRefreshKey]   = useState(0);
+  const [printing,     setPrinting]     = useState(false);
+  const printReady = useRef<() => void>(() => {});
 
   const markers = useMemo<MarkerData[]>(() => {
     const hsMap = new Map(hotspots.map(h => [h.establishment_id, h]));
@@ -381,53 +371,23 @@ export default function WCOMap() {
   const kdeOverlayBounds: [[number, number], [number, number]] | null =
     kde ? [[kde.lat_min, kde.lng_min], [kde.lat_max, kde.lng_max]] : null;
 
-  async function exportMapPDF() {
-    // The map is briefly resized to the exact printable A4 area (6.27 × 7.7 in at 1 in
-    // margins) and refitted, so tiles load for the whole page on phones and desktops alike.
-    const style = document.createElement("style");
-    style.id = "__map-print-style";
-    style.textContent = `
-      #__map-print-root.wco-map-printing {
-        position: fixed !important; top: 0 !important; left: 0 !important;
-        width: 6.27in !important; height: 7.7in !important; z-index: 99999 !important;
-        background: #fff !important; flex: none !important;
-      }
-      @media print {
-        @page { margin: 1in; size: A4 portrait; }
-        body * { visibility: hidden !important; }
-        #__map-print-root,
-        #__map-print-root * { visibility: visible !important; }
-        .map-noprint, .map-noprint * { display: none !important; visibility: hidden !important; }
-        .leaflet-control-zoom { display: none !important; }
-        .wco-print-only { display: block !important; }
-        #__map-print-root * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-        #__map-print-root {
-          position: fixed !important;
-          top: 0 !important;
-          left: 0 !important;
-          width: 6.27in !important;
-          height: 7.7in !important;
-          z-index: 99999 !important;
-        }
-      }
-    `;
-    document.head.appendChild(style);
-    const root = document.getElementById("__map-print-root");
-    root?.classList.add("wco-map-printing");
-    window.dispatchEvent(new Event("wco:print-prepare"));
-    await new Promise(r => setTimeout(r, 1500));   // let tiles for the new extent load
-    window.print();
-    setTimeout(() => {
-      root?.classList.remove("wco-map-printing");
-      window.dispatchEvent(new Event("wco:print-done"));
-      document.getElementById("__map-print-style")?.remove();
-    }, 1500);
+  function exportMapPDF() {
+    // The PDF comes from a separate, off-screen A4 map (PrintMapSheet), so the
+    // map on screen never resizes. Printing starts as soon as its tiles load.
+    if (printing || !markers.length) return;
+    const { promise, resolve } = deferred();
+    printReady.current = resolve;
+    setPrinting(true);
+    void printWhenReady(promise, () => setPrinting(false), {
+      bodyClass: "wco-sheet-printing",
+      pageCss: "@page { size: A4 portrait; margin: 0.5in; }",
+    });
   }
 
   return (
     <div className="wco-map-layout" style={{ display: "flex", height: "100%", minHeight: 0 }}>
       {/* ── Map ──────────────────────────────────────────────────────────── */}
-      <div id="__map-print-root" className="wco-map-canvas" style={{ flex: 1, position: "relative", minWidth: 0 }}>
+      <div className="wco-map-canvas" style={{ flex: 1, position: "relative", minWidth: 0 }}>
         {loading && (
           <div style={{
             position: "absolute", inset: 0, zIndex: 9999,
@@ -540,21 +500,9 @@ export default function WCOMap() {
           })}
 
           <FitBounds hotspots={hotspots} />
-          <PrintFit hotspots={hotspots} />
           <FlyToEstab id={selectedId} markers={markers} />
           <ResetViewControl hotspots={hotspots} tick={resetTick} />
         </MapContainer>
-
-        {/* Title caption that only appears in the exported PDF */}
-        <div className="wco-print-only" style={{
-          display: "none", position: "absolute", top: 10, left: 10, zIndex: 1000,
-          background: "rgba(255,255,255,0.92)", borderRadius: 8, padding: "6px 10px",
-          fontSize: 11, color: "#1f3d35", boxShadow: "0 1px 4px rgba(0,0,0,0.15)",
-        }}>
-          <b>WCO Atlas — Gi* hotspot map, Batangas City</b><br />
-          {new Date().toLocaleDateString("en-PH", { year: "numeric", month: "long", day: "numeric" })}
-          {" · "}{hotspots.length} establishments · colours = Gi* z-score
-        </div>
 
         {/* Bottom-left button row — flex so buttons never overlap */}
         <div className="map-noprint wco-map-buttons" style={{
@@ -586,6 +534,8 @@ export default function WCOMap() {
         <button
           className="map-noprint wco-map-export"
           onClick={exportMapPDF}
+          disabled={printing}
+          aria-busy={printing}
           style={{
             position: "absolute", bottom: 24, right: 14, zIndex: 500,
             padding: "7px 14px", borderRadius: 11, border: "1px solid rgba(255,255,255,0.8)",
@@ -595,8 +545,24 @@ export default function WCOMap() {
             boxShadow: "0 4px 14px rgba(15,110,86,0.18)",
           }}
         >
-          Export PDF
+          {printing ? "Preparing PDF…" : "Export PDF"}
         </button>
+
+        {printing && (
+          <PrintMapSheet
+            markers={markers.map(m => ({
+              lat: m.latitude, lng: m.longitude,
+              color: m.hotspot ? zColor(m.hotspot.gi_star_z) : "#a0aec0",
+              radius: m.hotspot ? zRadius(m.hotspot.gi_star_z) : 5,
+            }))}
+            kde={showKde && kdeImageUrl && kdeOverlayBounds ? { url: kdeImageUrl, bounds: kdeOverlayBounds } : null}
+            title="WCO Atlas — Gi* hotspot map"
+            subtitle={`Batangas City · ${new Date().toLocaleDateString("en-PH", { year: "numeric", month: "long", day: "numeric" })} · ${markers.length} establishments${showKde ? " · KDE heatmap shown" : ""}`}
+            legend={PRINT_LEGEND}
+            note="Getis-Ord Gi* with a fixed distance band; each marker's colour and size follow its z-score. Only |z| ≥ 1.96 is statistically significant (p < 0.05). The KDE heatmap shows concentration, not significance. Map data © OpenStreetMap contributors."
+            onReady={() => printReady.current()}
+          />
+        )}
 
         {/* Sidebar toggle — lives in map div so it's always visible */}
         <button

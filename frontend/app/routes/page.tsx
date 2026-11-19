@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import ProtectedRoute from "@/components/auth/ProtectedRoute";
 import Navbar from "@/components/layout/Navbar";
 import { API_BASE, getToken } from "@/lib/api";
 import { glass, greenGradient } from "@/lib/theme";
 import { useAuth } from "@/lib/auth-context";
+import { printWhenReady, deferred } from "@/lib/print";
 
 const LocationPicker = dynamic(() => import("@/components/maps/LocationPicker"), { ssr: false });
 const RouteMap = dynamic(() => import("@/components/maps/RouteMapView"), { ssr: false });
@@ -125,6 +126,8 @@ function RoutesContent() {
   const [hotspotOnly, setHotspotOnly] = useState(false);
 
   const [computing, setComputing] = useState(false);
+  const [printingRoute, setPrintingRoute] = useState(false);
+  const routeReady = useRef<() => void>(() => {});
   const [result, setResult] = useState<RouteResult | null>(null);
   const [p2pResult, setP2pResult] = useState<{ distance_m: number; geometry?: [number,number][] | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -599,49 +602,38 @@ function RoutesContent() {
           )}
 
           {result && (() => {
-            async function exportRoutePDF() {
-              const style = document.createElement("style");
-              style.id = "__route-print-style";
-              style.textContent = `
-                /* While preparing: size the map to the printed width so tiles cover it */
-                body.wco-route-printing .route-map-wrapper { width: 6.27in !important; max-width: none !important; }
-                body.wco-route-printing .route-map-wrapper .leaflet-container { height: 240px !important; }
+            function exportRoutePDF() {
+              // The PDF uses a separate print-sized copy of the route map (rendered
+              // off-screen), so the map on screen never resizes during export.
+              if (printingRoute) return;
+              const { promise, resolve } = deferred();
+              routeReady.current = resolve;
+              setPrintingRoute(true);
+              void printWhenReady(promise, () => setPrintingRoute(false), { bodyClass: "wco-route-printing", pageCss: `
                 @media print {
-                  .leaflet-control-zoom { display: none !important; }
+                  /* 1in margins = the 6.27in width the print map's tiles were loaded for. */
                   @page { margin: 1in; size: A4 portrait; }
-                  body * { visibility: hidden !important; }
-                  #route-print-area, #route-print-area * { visibility: visible !important; }
-                  #route-print-area {
-                    position: fixed !important;
-                    top: 0 !important;
-                    left: 0 !important;
-                    padding: 0 !important;
-                    background: white !important;
-                    width: 100% !important;
-                    font-family: system-ui, sans-serif !important;
+                  /* Print only the route area, in normal flow so long stop lists continue
+                     onto further pages: hide everything else, flatten its ancestors. */
+                  body.wco-route-printing *:not(:has(#route-print-area)):not(#route-print-area):not(#route-print-area *) { display: none !important; }
+                  body.wco-route-printing *:has(#route-print-area) {
+                    display: block !important; position: static !important; margin: 0 !important; padding: 0 !important;
+                    width: auto !important; max-width: none !important; height: auto !important; min-height: 0 !important;
+                    background: none !important; box-shadow: none !important; border: 0 !important; overflow: visible !important;
                   }
+                  #route-print-area { font-family: system-ui, sans-serif !important; }
+                  .leaflet-control-zoom { display: none !important; }
                   .route-print-header { display: block !important; }
-                  .route-map-wrapper { height: 240px !important; overflow: hidden !important; }
-                  .route-map-wrapper * { visibility: visible !important; }
-                  .leaflet-container { height: 240px !important; }
+                  .route-screen-map { display: none !important; }
                   /* Keep card colours and reflow the summary grid for portrait width */
                   #route-print-area * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
                   .route-summary-grid { grid-template-columns: repeat(2, 1fr) !important; }
                   #route-print-area table { width: 100% !important; font-size: 11px !important; }
                   #route-print-area tr { break-inside: avoid; page-break-inside: avoid; }
+                  .wco-print-copy { break-inside: avoid; page-break-inside: avoid; }
                   .route-noprint { display: none !important; }
                 }
-              `;
-              document.head.appendChild(style);
-              document.body.classList.add("wco-route-printing");
-              window.dispatchEvent(new Event("wco:print-prepare"));
-              await new Promise(r => setTimeout(r, 1500));   // let tiles for the new size load
-              window.print();
-              setTimeout(() => {
-                document.body.classList.remove("wco-route-printing");
-                window.dispatchEvent(new Event("wco:print-done"));
-                document.getElementById("__route-print-style")?.remove();
-              }, 1500);
+              ` });
             }
             return (
             <div style={{ display: "flex", flexDirection: "column", gap: 16 }} id="route-print-area">
@@ -688,7 +680,7 @@ function RoutesContent() {
                 </div>
               )}
 
-              <div className="route-map-wrapper">
+              <div className="route-map-wrapper route-screen-map">
                 <RouteMap
                   depotLat={result.depot_lat}
                   depotLng={result.depot_lng}
@@ -697,6 +689,19 @@ function RoutesContent() {
                   geometry={result.geometry}
                 />
               </div>
+              {printingRoute && (
+                <div className="wco-print-copy" aria-hidden>
+                  <RouteMap
+                    depotLat={result.depot_lat}
+                    depotLng={result.depot_lng}
+                    depotName={result.depot_name}
+                    stops={result.stops}
+                    geometry={result.geometry}
+                    printMode
+                    onReady={() => routeReady.current()}
+                  />
+                </div>
+              )}
 
               {/* Route stops table */}
               <div style={{ ...glass, borderRadius: 20, overflow: "hidden" }}>
@@ -707,9 +712,11 @@ function RoutesContent() {
                     <button
                       className="route-noprint"
                       onClick={exportRoutePDF}
+                      disabled={printingRoute}
+                      aria-busy={printingRoute}
                       style={{ fontSize: 11, padding: "5px 12px", borderRadius: 8, border: "1px solid #e2e8f0", background: "white", cursor: "pointer", color: "#374151", fontWeight: 600, fontFamily: "inherit" }}
                     >
-                      Export PDF
+                      {printingRoute ? "Preparing PDF…" : "Export PDF"}
                     </button>
                   </div>
                 </div>

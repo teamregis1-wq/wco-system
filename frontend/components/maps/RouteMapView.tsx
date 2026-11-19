@@ -19,28 +19,10 @@ interface Props {
   stops: Stop[];
   /** Road geometry from OSRM: [[lat, lng], ...] — if provided, draws actual road path */
   geometry?: [number, number][] | null;
-}
-
-/** For PDF export: on "wco:print-prepare" re-measure and fit the whole route;
- *  on "wco:print-done" restore the previous view. */
-function PrintFit({ points }: { points: [number, number][] }) {
-  const map = useMap();
-  useEffect(() => {
-    let saved: { c: ReturnType<typeof map.getCenter>; z: number } | null = null;
-    const prepare = () => {
-      saved = { c: map.getCenter(), z: map.getZoom() };
-      map.invalidateSize({ animate: false });
-      if (points.length > 1) map.fitBounds(points, { padding: [20, 20], animate: false });
-    };
-    const done = () => {
-      map.invalidateSize({ animate: false });
-      if (saved) map.setView(saved.c, saved.z, { animate: false });
-    };
-    window.addEventListener("wco:print-prepare", prepare);
-    window.addEventListener("wco:print-done", done);
-    return () => { window.removeEventListener("wco:print-prepare", prepare); window.removeEventListener("wco:print-done", done); };
-  }, [map, points]);
-  return null;
+  /** PDF copy: fitted to the whole route, no controls, numbered stops, fixed height. */
+  printMode?: boolean;
+  /** Called once the map tiles have loaded (used to start printing). */
+  onReady?: () => void;
 }
 
 /** Re-measure the map after the container is resized (expand/collapse). */
@@ -55,7 +37,7 @@ function ResizeFix({ expanded }: { expanded: boolean }) {
   return null;
 }
 
-export default function RouteMapView({ depotLat, depotLng, depotName, stops, geometry }: Props) {
+export default function RouteMapView({ depotLat, depotLng, depotName, stops, geometry, printMode = false, onReady }: Props) {
   const [expanded, setExpanded] = useState(false);
 
   // Close the expanded view with Escape
@@ -79,6 +61,55 @@ export default function RouteMapView({ depotLat, depotLng, depotName, stops, geo
   const centerLng = (Math.min(...allLngs) + Math.max(...allLngs)) / 2;
 
   const roadPath = geometry && geometry.length > 1 ? geometry : null;
+
+  if (printMode) {
+    const pts = roadPath ?? straightPath;
+    const lats = pts.map(p => p[0]), lngs = pts.map(p => p[1]);
+    return (
+      <div style={{ border: "1px solid #dfe7e3", borderRadius: 8, overflow: "hidden" }}>
+        <div style={{ height: "3.5in" }}>
+          <MapContainer
+            bounds={[[Math.min(...lats), Math.min(...lngs)], [Math.max(...lats), Math.max(...lngs)]]}
+            boundsOptions={{ padding: [24, 24] }}
+            style={{ height: "100%", width: "100%" }}
+            zoomControl={false} dragging={false} scrollWheelZoom={false} doubleClickZoom={false}
+            touchZoom={false} keyboard={false} fadeAnimation={false} zoomAnimation={false}
+          >
+            <TileLayer
+              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+              attribution='&copy; OpenStreetMap contributors'
+              eventHandlers={onReady ? { load: onReady } : undefined}
+            />
+            <Polyline
+              positions={pts}
+              pathOptions={roadPath
+                ? { color: "#0f6e56", weight: 4, opacity: 0.9 }
+                : { color: "#0f6e56", weight: 3, dashArray: "8 4", opacity: 0.75 }}
+            />
+            <CircleMarker center={[depotLat, depotLng]} radius={9}
+              pathOptions={{ fillColor: "#0f6e56", color: "white", weight: 2, fillOpacity: 1 }}>
+              <Tooltip permanent direction="top" offset={[0, -10]}>
+                <span style={{ fontSize: 10, fontWeight: 700 }}>{depotName}</span>
+              </Tooltip>
+            </CircleMarker>
+            {stops.map(s => (
+              <CircleMarker key={s.stop_number} center={[s.lat, s.lng]} radius={8}
+                pathOptions={{ fillColor: "#0369a1", color: "white", weight: 2, fillOpacity: 1 }}>
+                <Tooltip permanent direction="right" offset={[8, 0]} className="wco-stop-label">
+                  <span style={{ fontSize: 10, fontWeight: 800 }}>{s.stop_number}</span>
+                </Tooltip>
+              </CircleMarker>
+            ))}
+          </MapContainer>
+        </div>
+        <div style={{ padding: "4px 10px", fontSize: 9.5, color: roadPath ? "#166534" : "#92400e",
+                      background: roadPath ? "#f0fdf4" : "#fef9ec", borderTop: "1px solid #dfe7e3" }}>
+          {roadPath ? "Road-following path (OpenStreetMap via OSRM)" : "Straight-line path (OSRM unavailable)"}
+          {" · numbers = stop order · Map data © OpenStreetMap contributors"}
+        </div>
+      </div>
+    );
+  }
 
   const wrapperStyle: React.CSSProperties = expanded
     ? {
@@ -122,7 +153,6 @@ export default function RouteMapView({ depotLat, depotLng, depotName, stops, geo
               attribution='&copy; OpenStreetMap contributors'
             />
             <ResizeFix expanded={expanded} />
-            <PrintFit points={roadPath ?? straightPath} />
 
             {/* Road-following polyline (OSRM) — solid line */}
             {roadPath && (
