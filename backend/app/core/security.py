@@ -30,10 +30,11 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 
 def create_access_token(*, user_id: int, role: str) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(
-        minutes=settings.access_token_expire_minutes
-    )
-    payload = {"sub": str(user_id), "role": role, "exp": expire}
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(minutes=settings.access_token_expire_minutes)
+    # "role" is informational for the client only; authorization always uses
+    # the role stored in the database (see get_current_user / require_role).
+    payload = {"sub": str(user_id), "role": role, "iat": now, "exp": expire}
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
@@ -54,13 +55,11 @@ def get_current_user(
         payload = jwt.decode(
             token, settings.jwt_secret, algorithms=[settings.jwt_algorithm]
         )
-        user_id = payload.get("sub")
-        if user_id is None:
-            raise credentials_exception
-    except JWTError:
+        user_id = int(payload.get("sub"))
+    except (JWTError, TypeError, ValueError):
         raise credentials_exception
 
-    user = db.get(User, int(user_id))
+    user = db.get(User, user_id)
     if user is None:
         raise credentials_exception
     return user

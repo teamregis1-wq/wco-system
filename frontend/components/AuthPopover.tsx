@@ -114,21 +114,6 @@ function SignInForm() {
         {busy ? "Signing in…" : "Sign In"}
       </button>
 
-      {/* Dev hint — remove before production hand-off */}
-      <div style={P.hintBox}>
-        <div style={P.hintTitle}>Test accounts</div>
-        {[
-          { role: "Admin",      email: "admin@wco.local",      pw: "admin12345",    color: "#92400e", bg: "#fef3c7" },
-          { role: "Researcher", email: "researcher@wco.local", pw: "research12345", color: "#1d4ed8", bg: "#dbeafe" },
-        ].map(a => (
-          <button key={a.email} type="button"
-            onClick={() => { setEmail(a.email); setPassword(a.pw); setError(null); }}
-            style={P.hintRow}>
-            <span style={{ ...P.hintBadge, background: a.bg, color: a.color }}>{a.role}</span>
-            <span style={P.hintEmail}>{a.email}</span>
-          </button>
-        ))}
-      </div>
     </form>
   );
 }
@@ -257,24 +242,4 @@ const P: Record<string, React.CSSProperties> = {
     background: "#f0fdf4", border: "1px solid #bbf7d0",
     borderRadius: 9, fontSize: 11.5, color: "#166534", lineHeight: 1.5,
   },
-  // Dev hints
-  hintBox: {
-    marginTop: 14, padding: 11, background: "#f8fafc",
-    borderRadius: 10, border: "1px solid #e2e8f0",
-  },
-  hintTitle: {
-    fontSize: 9.5, fontWeight: 700, color: "#94a3b8",
-    letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 6,
-  },
-  hintRow: {
-    display: "flex", alignItems: "center", gap: 8, width: "100%",
-    padding: "4px 7px", borderRadius: 7, border: "none",
-    background: "transparent", cursor: "pointer",
-    textAlign: "left", marginBottom: 2, fontFamily: "inherit",
-  },
-  hintBadge: {
-    fontSize: 9.5, fontWeight: 700, padding: "2px 7px", borderRadius: 99,
-    textTransform: "uppercase", letterSpacing: "0.05em", flexShrink: 0,
-  },
-  hintEmail: { fontSize: 11.5, color: "#4a5568" },
 };
