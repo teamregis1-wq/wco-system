@@ -1,7 +1,8 @@
 # Forecasting Model: Training, Evaluation and Automatic Retraining
 
 Implementation: `backend/app/services/training.py` (pipeline), `retraining.py` (jobs and scheduling),
-`model_store.py` (persistence), `forecasting.py` (inference). The Colab notebook mirrors the same method.
+`model_store.py` (persistence), `lstm_numpy.py` (inference), `forecasting.py` (forecast API),
+`scripts/retrain_worker.py` (worker process). The Colab notebook mirrors the same method.
 
 ## 1. Model
 
@@ -12,6 +13,7 @@ Implementation: `backend/app/services/training.py` (pipeline), `retraining.py` (
 | Output | next week's quantity; 13 weeks are produced **recursively** (each prediction is fed back as input) |
 | Loss / optimiser | MSE / Adam (lr 1e-3), batch 32, ≤ 80 epochs, early stopping (patience 8) on the validation period |
 | Seed | 42 (Python, NumPy, PyTorch, DataLoader shuffling) — same data + seed → identical weights (tested) |
+| Training / inference | trained with PyTorch (worker); served by a NumPy implementation of the same forward pass, which matches PyTorch to ~1e-7 (tested). Evaluation uses the NumPy path, so the reported numbers come from exactly the deployed code. Weights are stored as NPZ |
 | Unit of all errors | **liters of WCO per establishment per week** (L/establishment-week) |
 
 The 12-week input and 13-week horizon were kept unchanged.
@@ -134,6 +136,16 @@ seasonal naive 3.73 L and naive 9.87 L.
 **Terminology:** each run retrains the model *from scratch* on the full current dataset. This is
 **automatic batch retraining**, not online/continual learning (weights are never updated incrementally).
 
+**Who executes jobs (`RETRAIN_EXECUTOR`):**
+- `worker` (deployed on Vercel; auto-detected there): the API only queues and coalesces jobs in
+  PostgreSQL. A separate process, `python -m scripts.retrain_worker`, polls every 5 s, claims due jobs,
+  trains, and activates models. Serverless functions are frozen after each response and the API bundle
+  has no PyTorch, so training cannot run inside them reliably.
+- `inprocess` (local development / one long-running server): the API process also executes jobs on an in-process timer.
+
+Both modes use the same queue, claim, locks, retries and activation code. See
+[DEPLOYMENT_VERCEL.md §5](DEPLOYMENT_VERCEL.md#5-the-retraining-worker) for hosting the worker.
+
 ```
 WCO create / bulk import / edit / delete, establishment (de)activation
    │  (only after db.commit() succeeds; failed or rejected writes never trigger)
@@ -161,27 +173,31 @@ data validation → chronological split → train → held-out evaluation
   automatic job is folded into the manual one.
 - **No partial models:** weights are stored in the database with a SHA-256. The local cache is written
   to a temp file, fsynced and atomically renamed, and is checksum-verified before use. Activation is one transaction.
-- **Restarts:** pending jobs live in the database and are re-armed on startup. A job orphaned by a crash
-  is marked failed ("interrupted"). Models survive restarts and ephemeral disks because the DB holds them.
+- **Restarts and retries:** pending jobs live in the database. A job orphaned by a crashed process is marked
+  failed ("interrupted") and **re-queued**. A transient failure (e.g. lost DB connection) is re-queued with
+  back-off up to `RETRAIN_MAX_ATTEMPTS` (3). A data-validation rejection is not retried (more data is
+  needed). Models survive restarts and ephemeral disks because the DB holds them.
+- **Worker visibility:** each worker writes a heartbeat (`retraining_workers`). The status endpoint and
+  Admin panel report "worker online/offline", so a job waiting for a stopped worker is visible, not silent.
 - **Several workers:** at most one pending row (partial unique index); the claim is atomic; the
   PostgreSQL advisory lock prevents two trainings at once; every worker polls for queued jobs every
   `RETRAIN_POLL_SECONDS` (default 30 s), so a job queued by another worker or a script still runs.
 
-**Limitations.** This is an in-process scheduler (threads in the API process), suitable for a thesis
-demonstration, not a production-grade durable queue:
+**Limitations (stated honestly):**
 
-- an interrupted job is failed, not resumed
-- training uses the API host's CPU and slows requests while it runs (~10–60 s here)
-- advisory locks need a session connection (Supabase *Session* pooler, not the Transaction pooler)
-- a worker that loses its DB connection mid-training releases the lock, so a second training could
-  start; the single-active-version constraint keeps the result consistent
-
-A production system would use a durable queue/worker (e.g. a separate worker process with a DB-backed
-or Redis queue) and object storage for artifacts.
+- The queue is a PostgreSQL table polled by the worker. This is durable and adequate for this workload,
+  but not a dedicated message broker.
+- An interrupted job is re-run from the start, not resumed.
+- **Retraining happens only while a worker is running.** If no worker runs, jobs wait (visible in the UI).
+- Advisory locks need a session connection: the worker must use the Supabase *Session* pooler (5432).
+- A worker that loses its DB connection mid-training releases the lock, so a second training could
+  start. The single-active-version constraint keeps the result consistent.
+- In `inprocess` mode, training competes with request handling for CPU.
 
 **Configuration:** `AUTO_RETRAIN_ENABLED`, `RETRAIN_DEBOUNCE_SECONDS`, `RETRAIN_POLL_SECONDS`,
 `ML_RANDOM_SEED`, `ML_MAX_EPOCHS`, `ML_PATIENCE`, `ML_TEST_WEEKS` (≥ 13), `ML_VAL_WEEKS`,
-`ML_MIN_HISTORY_WEEKS`, `MODEL_ARTIFACT_DIR`. A dataset needs roughly 12 + 1 + 6 + 16 = **35+ consecutive weeks** per
+`ML_MIN_HISTORY_WEEKS`, `MODEL_ARTIFACT_DIR`, `RETRAIN_EXECUTOR`, `RETRAIN_MAX_ATTEMPTS`,
+`WORKER_POLL_SECONDS`, `WORKER_HEARTBEAT_SECONDS`. A dataset needs roughly 12 + 1 + 6 + 16 = **35+ consecutive weeks** per
 series for the default split; with less, the job fails with an explanatory message and the previous model stays active.
 
 <a id="synthetic-data"></a>
@@ -218,6 +234,18 @@ mall directories; it is not used by the app.
 If the live database still uses real business names next to synthetic volumes, say so explicitly when
 presenting, or rename them.
 
+**Present study period and leakage.** The demo loader ends the series at the **last completed week**,
+so `/forecast` predicts the 13 weeks starting next week. Training and evaluation use no future information:
+- the split is chronological
+- the scaler uses training weeks only
+- early stopping uses weeks *before* the test period
+- every backtest input window ends at its forecast origin
+
+Records for future weeks are rejected by the API.
+
+**Existing data.** Don't relabel rows as `synthetic` (`scripts/label_data_source.py`) unless their origin
+has been verified. On the new project all rows come from the loader and are already labelled.
+
 **IDs.** Database ids are not stable across databases (the archived export uses 551–670). Use
 `wco_code` to match establishments. The loader, the export, and the record importer never rely on archived ids.
 
@@ -234,23 +262,45 @@ and a Benjamini–Hochberg FDR-adjusted p-value is also reported. Categories:
 
 Before the audit the code computed Gi (self excluded) with a degree-based band.
 
-**Hotspot analysis: what the data shows.** The 120 demo sites span only ≈ 2.1 km × 4.9 km (median
-nearest-neighbour distance 59 m). With the default 1,500 m band each site has ≈ 54 neighbours, nearly
-half the city, so Gi\* compares each site with a near-global mean. On the demo data:
+**Distance-band selection and sensitivity (demo dataset, 120 sites, measured 2026-11-19).**
+The sites span only ≈ 2.1 km × 4.9 km (median nearest-neighbour distance 59 m). Global Moran's I
+(binary weights, normality z-score) and Gi* counts by band:
 
-| Band | Mean neighbours | Hot spots p < 0.05 (unadjusted) | Hot spots FDR < 0.05 |
-|---|---|---|---|
-| 250 m | 8.7 | 8 | 0 |
-| 500 m | 14.6 | 5 | 0 |
-| 1,000 m | 28.4 | 5 | 0 |
-| 1,500 m (default) | 54.5 | 0 | 0 |
+| Weights | Mean (min) neighbours | Moran's I | z(I) | Gi* hot, p < .05 | Gi* hot, FDR < .05 | Gi* cold, p < .05 |
+|---|---|---|---|---|---|---|
+| 200 m | 7.1 (0, 1 isolated) | 0.092 | 2.20 | 6 | 0 | 5 |
+| 400 m | 12.3 (2) | 0.060 | 2.03 | 6 | 0 | 6 |
+| 500 m | 14.6 (2) | 0.043 | 1.67 | 5 | 0 | 6 |
+| 750 m | 20.8 (7) | 0.013 | 0.84 | 3 | 0 | 3 |
+| 1,000 m | 28.4 (7) | −0.028 | −0.98 | 5 | 0 | 2 |
+| **1,500 m (current default)** | 54.5 (14) | −0.014 | −0.45 | 0 | 0 | 0 |
+| 8 nearest neighbours | 8 | 0.101 | 2.65 | 11 | 0 | — |
 
-No hot spot survives the multiple-testing correction at any band. That is the expected result, because the
-synthetic volumes were generated without spatial clustering. The map's continuous colour scale still
-shows relative z-scores. **Decision needed for the thesis:** justify a band (e.g. the distance at which
-global Moran's I / incremental spatial autocorrelation peaks, or a k-nearest-neighbour rule ensuring
-every site has neighbours), and report FDR-adjusted significance. `GET /gis/hotspots?band_m=500` lets you
-show the sensitivity live.
+How to read it:
+- There is **weak positive global spatial autocorrelation at short ranges** (≈ 200–400 m, or 8 nearest
+  neighbours; p ≈ 0.01–0.04). It plausibly comes from high-volume fast-food outlets clustered around the
+  mall. It disappears at 1,500 m, where each site's "neighbourhood" is nearly half the city.
+- **Recommended band: 400 m.** It's the largest band that keeps the Moran's I z-score significant, every
+  site has ≥ 2 neighbours, and the mean is ≈ 12. 8 nearest neighbours is an equally defensible alternative.
+  Set `GIS_BAND_M=400` (or query `?band_m=400`). The choice should be justified *before* looking at which
+  sites become hot spots, and agreed with your adviser.
+- **At no band does any individual Gi* hot spot survive the Benjamini–Hochberg correction.** With ~120
+  simultaneous tests, the 5–11 "hot spots" at p < 0.05 are about what chance alone would produce (≈ 6).
+
+**Interpreting "no significant hotspots".** This is a valid, reportable result, not a failure:
+- **Wrong:** "Gi* found no hotspots, so WCO is evenly distributed." The test has limited power, and the
+  map's colours still show relative z-scores.
+- **Right:** "At the 400 m band, global Moran's I indicates weak clustering (I = 0.060, z = 2.03), but no
+  establishment-level hot spot is significant after FDR correction. The colour scale shows relative Gi*
+  z-scores, not confirmed clusters."
+- Remember the synthetic volumes were generated **without** any spatial process, so spatial findings on
+  this data describe the generator and the site layout, not Batangas City.
+- KDE shows where generation potential is *concentrated* (density of sites weighted by volume). It does
+  not test significance and should not be described as hotspot detection.
+
+**Claims to avoid in the presentation:** "statistically significant hotspots" (unless FDR-significant),
+"optimal routes", "accurate forecasts for Batangas City", "online/continuous learning", and anything
+implying real establishments supplied the volumes or consented.
 
 **KDE.** `scipy.stats.gaussian_kde` in projected metres, weighted by each site's mean weekly WCO,
 Scott's rule. The grid shows **relative** density (normalised to 0–1), not L/km². `bandwidth_m` is

@@ -1,200 +1,167 @@
-# Supabase Setup, Recovery, Backup and Migration
+# Supabase Setup — New Project for WCO Atlas
 
-This guide covers three situations: the old project is **paused**, its ownership must be
-**transferred**, or you need a **new** project. In every case: check first, back up before
-changing anything, and never run a destructive script against data you want to keep.
+This guide sets up a **new, empty** Supabase project and connects the existing application to it,
+using the existing Alembic migrations. Nothing here touches the old `hotspotapp` project.
 
-> Nothing in this repository was run against your Supabase project during the audit: no
-> credentials were available. Every command below is for you to run.
+> Credentials go only in `backend/.env` (gitignored) and in Vercel's environment-variable settings.
+> Never paste them into code, docs, issues or screenshots.
 
-## 1. Check the existing project first
+## 0. Before you start
 
-Do not create a new database until you know the old one is gone.
+- Python **3.11 or 3.12** with the backend virtualenv (`backend/venv`, or `backend/.venv` with 3.12).
+  The worker and the tests need `requirements-dev.txt`, which includes PyTorch.
+- In the Supabase dashboard, use a strong database password (not a variation of an old one). Reset it under
+  *Project Settings → Database → Reset database password* if it was ever shared in chat or email.
 
-1. Sign in at <https://supabase.com/dashboard> with the account that created the project and open it.
-2. Read the banner on the project page:
-   - **"Paused"** — free-plan projects are paused after a period of inactivity. Click **Restore project**
-     and wait until the status is *Healthy* (this can take several minutes). The dashboard tells you
-     how long a paused project remains restorable; restore it before that deadline.
-   - **Not listed** — you may be signed in with a different account, or the project belongs to an
-     organisation you are not a member of. Ask the owner to invite you
-     (*Organization → Team*), or to transfer the project (§1.1).
-   - **Healthy** — go straight to §3.
-3. Confirm the data is there: *Table Editor → `wco_generation_records`* (expect ~6,240 rows if the
-   bundled synthetic dataset was loaded).
+## 1. Create the project
 
-### 1.1 Transferring ownership
-The current owner can move the project into an organisation you own:
-*Project Settings → General → Transfer project*. Both people must be owners of the target
-organisation, and the plan may differ between organisations. A transfer keeps the database,
-connection strings and data; you only need to update `DATABASE_URL` if the password is reset.
+1. Sign in with the thesis Google account → **New project**.
+2. Region: **Southeast Asia (Singapore)**, the closest to Batangas City. Use the same region later for
+   Vercel Functions (`sin1`) to keep API → database latency low.
+3. Save the database password in a password manager.
 
-### 1.2 Creating a new project (only if the old one cannot be recovered)
-1. *New project* → pick the region closest to the Philippines (e.g. Singapore, `ap-southeast-1`).
-2. Save the database password in a password manager. You cannot view it again; you can only reset it.
-3. Enable PostGIS: *Database → Extensions → postgis → Enable* (or SQL editor:
-   `CREATE EXTENSION IF NOT EXISTS postgis;`).
-4. Continue with §3, then load data (§5).
+## 2. Enable PostGIS (before running migrations)
 
-## 2. Connection string (Psycopg 3)
+*Database → Extensions → search "postgis" → Enable*. Supabase installs it in the `extensions` schema,
+which is on the default `search_path`, so the app's geometry columns and `ST_*` functions resolve
+without changes. (SQL editor alternative: `CREATE EXTENSION IF NOT EXISTS postgis WITH SCHEMA extensions;`.)
+`scripts/check_db.py` verifies that the `geometry` type resolves.
 
-*Project Settings → Database → Connection string → **Session pooler***. Use the **Session pooler**
-(port **5432**):
+## 3. Get the connection strings
 
-- The *direct* host is IPv6-only and fails on many home and campus networks.
-- The *Transaction pooler* (port 6543) is **not supported**: the retraining scheduler uses session-level
-  advisory locks, and SQLAlchemy/Psycopg rely on session state.
+Click **Connect** at the top of the project page:
 
-Put it in `backend/.env` (copy `backend/.env.example`; the file is gitignored):
+| Use | String | Port | Where |
+|---|---|---|---|
+| Local API, migrations, scripts, tests, **retraining worker** | **Session pooler** | 5432 | `backend/.env` → `DATABASE_URL` (worker on Vercel: `WORKER_DATABASE_URL`) |
+| **Vercel API functions** (serverless) | **Transaction pooler** | 6543 | Vercel env → `DATABASE_URL` |
 
-```
-DATABASE_URL=postgresql+psycopg://postgres.<project-ref>:<url-encoded-password>@aws-0-<region>.pooler.supabase.com:5432/postgres
-JWT_SECRET=<output of: python -c "import secrets; print(secrets.token_hex(32))">
-CORS_ORIGINS=http://localhost:3000
-```
+Format: `postgresql://postgres.<project-ref>:<password>@aws-0-ap-southeast-1.pooler.supabase.com:<port>/postgres`
 
-- `postgresql://…` (as copied from Supabase) also works; the app rewrites it to `postgresql+psycopg://`.
-- Percent-encode special characters in the password: `@`→`%40`, `#`→`%23`, `/`→`%2F`, `%`→`%25`.
-  (Alembic used to crash on `%` in the URL; that is fixed.)
-- Never commit `.env`, and never paste the connection string into issues, chat or screenshots. The
-  app only ever logs it with the password masked.
+- The **direct** host `db.<project-ref>.supabase.co` is **IPv6-only** (no IPv4 address). Vercel functions and many
+  networks cannot reach it, so use the pooler strings above.
+- `postgresql://` is fine; the app rewrites it to the Psycopg 3 driver. Percent-encode special characters in the password.
+- SSL: the app adds `sslmode=require` for non-local hosts automatically.
+- On port 6543 the app disables Psycopg's prepared statements (required by transaction pooling) automatically.
 
-### Required and optional environment variables
+Create `backend/.env` from `backend/.env.example` and set `DATABASE_URL` (Session pooler), `JWT_SECRET`
+(`python -c "import secrets; print(secrets.token_hex(32))"`) and `CORS_ORIGINS`.
 
-| Variable | Required | Purpose |
-|---|---|---|
-| `DATABASE_URL` | yes | Supabase Session-pooler URL |
-| `JWT_SECRET` | yes | ≥ 32 random characters; the backend refuses to start without it |
-| `CORS_ORIGINS` | yes in production | Comma-separated frontend origins (localhost and/or the Vercel URL) |
-| `DEFAULT_DATA_SOURCE` | no (`unspecified`) | Set to `synthetic` for the defense deployment |
-| `AUTO_RETRAIN_ENABLED`, `RETRAIN_DEBOUNCE_SECONDS`, `RETRAIN_POLL_SECONDS` | no | Automatic retraining (see ML doc) |
-| `ML_*`, `MODEL_ARTIFACT_DIR` | no | Training configuration / local model cache |
-| `OSRM_BASE_URL`, `OSRM_TIMEOUT_SECONDS`, `ROUTE_AVG_SPEED_KMH` | no | Routing |
-| `ALLOW_PUBLIC_REGISTRATION` | no (`true`) | Self-registration (always creates *viewer* accounts) |
-| Frontend: `NEXT_PUBLIC_API_BASE` | yes | e.g. `http://localhost:8000/api/v1` |
-
-## 3. Verify connectivity (read-only)
+## 4. Initialise the database (in this order)
 
 ```bash
 cd backend
-./venv/bin/python -m scripts.check_db
+./venv/bin/python -m scripts.check_db      # read-only: connects, PostGIS ok, schema "at None" (empty)
+./venv/bin/alembic upgrade head            # creates all tables, constraints, indexes, RLS (8 migrations)
+./venv/bin/python -m scripts.check_db      # expect: "schema at head (c9d0e1f2a3b4)", RLS on all tables
 ```
 
-The doctor never writes and never prints the password. It reports connectivity, the PostGIS version
-(with a spatial round-trip), the migration revision against the code's head, row counts, RLS status,
-data that would block the new constraints, geometry/lat-lng consistency, and a PostGIS cross-check
-of the Gi\* neighbour counts. Exit code 0 means everything passed.
+Migrations never run automatically: not on API startup, not on Vercel deployments. Run them yourself
+from a trusted machine after each pull that adds a migration (`alembic current` shows the state).
+The migration chain is linear: `c3103997e4f0 → a33177c2efed → 48824bcdd3da → 9c43835c3d40 → e1f2a3b4c5d6
+→ f2b3c4d5e6a7 → b7c8d9e0f1a2 → c9d0e1f2a3b4`.
 
-With the API running, `GET http://localhost:8000/health/db` returns the same summary (HTTP 503 if
-the database is unreachable, PostGIS is missing, or migrations are behind).
-
-Common errors:
-
-| Symptom | Cause |
-|---|---|
-| `OperationalError` / timeout | project paused, wrong host, or IPv6-only direct host → use the Session pooler |
-| `password authentication failed` | wrong password, or the user is not `postgres.<project-ref>` on the pooler |
-| `Tenant or user not found` | wrong project ref in the pooler user name |
-| startup log: "schema is at … but code expects …" | run migrations (§4) |
-
-## 4. Back up, then migrate
-
-### 4.1 Backup (always, before any migration)
-Install PostgreSQL client tools with a major version ≥ the server's (`SHOW server_version;` in the SQL editor).
-On macOS: `brew install libpq` and add its `bin` directory to your `PATH`.
+## 5. Create the first administrator
 
 ```bash
-# Full logical backup of the public schema (data + schema), custom format
-pg_dump "postgresql://postgres.<ref>:<password>@<pooler-host>:5432/postgres" \
-  --schema=public --no-owner --no-privileges --format=custom \
+./venv/bin/python -m scripts.create_admin --email <thesis-account-email> --name "<Name>"
+```
+
+The password is read with a hidden prompt (12+ characters) and is never printed or stored in plain text.
+Further accounts: sign in as admin → Admin → **+ Add user**. Public self-registration only creates viewers.
+
+## 6. Load the synthetic demonstration dataset
+
+```bash
+./venv/bin/python -m scripts.load_demo_data            # dry run: 120 establishments, 6,240 records
+./venv/bin/python -m scripts.load_demo_data --commit   # insert
+```
+
+- 120 establishments (60 restaurants, 40 fast food, 20 food manufacturers) × **52 consecutive weeks
+  ending at the last completed week**, so forecasts start from the present study period.
+- Every row is `data_source = synthetic`, `consent_given = false`, with **generic names**
+  ("Fast-food outlet FF012 — Pallocan West"), approximate landmark-based coordinates, and a fixed seed (42).
+- Additive and idempotent: re-running inserts nothing. Existing rows are never changed. Duplicate
+  establishment-weeks are impossible (unique constraint).
+- It queues one retraining job. Run the worker (§7) to train the first model.
+- Later, to bring the series up to date before a presentation, run
+  `./venv/bin/python -m scripts.load_demo_data --extend-existing --commit`.
+- Ids in the new database will not match the old one or `data/wco_export.csv`. Nothing relies on them;
+  `wco_code` is the stable key.
+- **Do not** import the old project's records or `data/batangas_city_restaurants_seed.csv` without first
+  reviewing where they came from. Don't run `label_data_source` on rows whose origin you haven't verified.
+
+## 7. Train the first model (retraining worker)
+
+```bash
+./venv/bin/python -m scripts.retrain_worker --once      # process the queued job, then exit
+# or keep it running so every data change is retrained automatically:
+./venv/bin/python -m scripts.retrain_worker
+```
+
+`/api/v1/forecast/training-status` (Admin → LSTM panel) then shows the active version, held-out
+metrics, and the worker heartbeat. Hosting options for a permanent worker: [DEPLOYMENT_VERCEL.md §5](DEPLOYMENT_VERCEL.md#5-the-retraining-worker).
+
+## 8. Verify against real PostgreSQL/PostGIS
+
+```bash
+# Non-destructive checks of the real public schema (read-only or rolled back):
+TEST_DATABASE_URL="<session-pooler-url>" TEST_TRANSACTION_POOLER_URL="<transaction-pooler-url>" \
+  ./venv/bin/python -m pytest tests/test_postgres_integration.py
+
+# Whole suite (auth, CRUD, imports, jobs, locking, versions, GIS, forecasts, routes) on real PostGIS,
+# isolated in a throwaway schema "wco_test" that is created and dropped by the run:
+TEST_DATABASE_URL="<session-pooler-url>" ./venv/bin/python -m pytest
+```
+
+The full-suite run creates its tables in the `wco_test` schema (never `public`), truncates them between
+tests, uses a separate advisory-lock key, and drops the schema at the end.
+
+## 9. Backups
+
+Take one before any migration on a database that has data you care about:
+
+```bash
+pg_dump "<session-pooler-url>" --schema=public --no-owner --no-privileges --format=custom \
   --file="wco_backup_$(date +%Y%m%d_%H%M).dump"
-
-# Secondary, human-readable copy of the training data
-cd backend && ./venv/bin/python -m scripts.export_csv --out "data/wco_backup_$(date +%Y%m%d).csv"
+./venv/bin/python -m scripts.export_csv            # dated CSV of all WCO records
 ```
 
-Keep the dump outside the repository. Do not rely on platform backups on the free plan.
+You need `pg_dump` with a major version ≥ the server's (macOS: `brew install libpq`). Restore into an
+empty project with `pg_restore --no-owner --no-privileges --dbname "<url>" <file>.dump` (enable PostGIS first).
+Rollback of the newest migration: `alembic downgrade b7c8d9e0f1a2` (drops `retraining_workers` and the retry
+counter). Back up first.
 
-Restore into an **empty** project if you ever need to:
-`pg_restore --no-owner --no-privileges --dbname "<new-project-url>" wco_backup_….dump`
-(enable PostGIS on the new project first).
+## 10. Access control and limits
 
-### 4.2 Apply migrations
-```bash
-cd backend
-./venv/bin/alembic current                 # where the database is now
-./venv/bin/alembic upgrade head --sql | less   # preview the SQL without running it
-./venv/bin/alembic upgrade head            # apply (transactional on PostgreSQL)
-./venv/bin/python -m scripts.check_db      # confirm
-```
-
-The new migration `b7c8d9e0f1a2` is **additive**. It creates two tables (with RLS), adds
-`data_source`/`updated_at` columns (existing rows get `unspecified`), and adds a unique constraint and
-CHECK constraints. It **does not modify, delete or reseed** existing rows. If existing data would
-violate a new constraint (e.g. a duplicate establishment-week), it aborts, changes nothing, and prints
-SQL to inspect the offending rows. Resolve those manually after the backup, then re-run.
-
-Rollback, if needed: `./venv/bin/alembic downgrade f2b3c4d5e6a7`. This drops the two new tables (and
-any trained model versions stored in them) and the `data_source`/`updated_at` columns, so take a
-backup first.
-
-### 4.3 Label the existing synthetic data
-Existing rows are `unspecified` after the migration. If they are the synthetic demo dataset:
-
-```bash
-./venv/bin/python -m scripts.label_data_source --source synthetic           # dry run
-./venv/bin/python -m scripts.label_data_source --source synthetic --commit  # apply
-```
-
-Only `unspecified` rows are changed; quantities are untouched; one audit-log entry is written.
-
-## 5. Loading demonstration data (new or empty project)
-
-```bash
-cd backend
-./venv/bin/python -m scripts.create_admin --email <your-email> --name "<Your Name>"  # hidden password prompt
-./venv/bin/python -m scripts.load_demo_data                # dry run: shows what would be inserted
-./venv/bin/python -m scripts.load_demo_data --commit       # inserts missing rows only
-```
-
-The loader is additive: it never updates or deletes, skips establishments whose `wco_code` exists,
-skips existing weeks, and labels everything synthetic. Use `--extend-existing` to continue existing
-series weekly up to the last completed week, so forecasts point into the future rather than the past.
-Details and assumptions: [ML_TRAINING_AND_EVALUATION.md](ML_TRAINING_AND_EVALUATION.md#synthetic-data).
-
-The old `scripts/seed.py` and `scripts/import_real_establishments.py` **wipe tables**. They now refuse
-to run without `--i-understand-this-deletes-data` plus typing the database host. Don't use them on the
-real project.
-
-## 6. Roles, RLS and access
-
-- **RLS** is enabled on every application table (migrations `e1f2a3b4c5d6`, `f2b3c4d5e6a7`,
-  `b7c8d9e0f1a2`) with **no policies**, so Supabase's auto-generated REST/GraphQL API returns nothing to
-  the `anon` and `authenticated` roles. Keep it that way; the frontend talks only to FastAPI.
-  Don't put the Supabase anon key or service-role key in the frontend.
-- The FastAPI backend connects as `postgres` (the table owner) and therefore **bypasses RLS**.
-  Authorization is enforced in the API (admin / researcher / viewer).
-- Recommended hardening (optional; test on a copy first): create a least-privilege login role for the app:
+- RLS is enabled on every application table with no policies, so Supabase's auto-generated REST API
+  exposes nothing to the anon key. The frontend only talks to FastAPI; don't put Supabase keys in the frontend.
+- The API connects as `postgres` (bypasses RLS); authorization is enforced by the API roles. Optional
+  hardening: a least-privilege login role for the app (test on a copy first; keep running migrations as `postgres`):
   ```sql
   CREATE ROLE wco_app LOGIN PASSWORD '<strong-password>';
   GRANT USAGE ON SCHEMA public TO wco_app;
   GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO wco_app;
   GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO wco_app;
-  -- RLS applies to non-owner roles, so give wco_app (and only wco_app) a permissive policy per table:
+  -- RLS applies to non-owner roles, so give wco_app (only) a permissive policy per table:
   DO $$ DECLARE t text; BEGIN
     FOR t IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'spatial_ref_sys' LOOP
       EXECUTE format('CREATE POLICY wco_app_all ON public.%I FOR ALL TO wco_app USING (true) WITH CHECK (true)', t);
     END LOOP; END $$;
   ```
-  Keep running migrations as `postgres`. New tables created by later migrations will need the same
-  grant and policy. If the app role has no policy, RLS silently returns zero rows to it.
+  Tables added by later migrations need the same grant and policy; without a policy RLS returns zero rows to that role.
+- **Connection budget.** Each API instance keeps ≤ `DB_POOL_SIZE + DB_MAX_OVERFLOW` (3 + 2) connections to
+  the pooler, and the worker uses about 2. The Supabase free tier allows hundreds of pooler *client*
+  connections (transaction mode multiplexes them onto a small server pool). If you see "too many clients",
+  lower `DB_POOL_SIZE` on Vercel to 1–2.
 
-## 7. Running the PostGIS integration tests (optional, throwaway database only)
+## Troubleshooting
 
-```bash
-TEST_DATABASE_URL="postgresql+psycopg://…throwaway…" ./venv/bin/python -m pytest tests/test_postgres_integration.py
-```
-
-They run migrations, insert test rows, and check PostGIS distances, CHECK constraints, RLS and
-the advisory lock. They refuse to run if the target already has establishments or WCO records.
-**Never point them at the production project.**
+| Symptom | Cause / fix |
+|---|---|
+| `OperationalError`, timeout | Using the IPv6-only direct host, or the project is paused → use the pooler string |
+| `password authentication failed` | Wrong password, or the user isn't `postgres.<project-ref>` on the pooler |
+| `Tenant or user not found` | Wrong project ref in the pooler user name |
+| `type "geometry" does not exist` | PostGIS not enabled (§2) |
+| `prepared statement … already exists` | Transaction pooler used without the app's settings (old code or another client) — use port 5432 for scripts |
+| Startup log "schema is at … but code expects …" | Run `alembic upgrade head` |

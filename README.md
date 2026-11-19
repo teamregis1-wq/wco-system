@@ -21,14 +21,18 @@ cd frontend
 npm run dev
 ```
 
+Local two-terminal development needs `NEXT_PUBLIC_API_BASE=http://localhost:8000/api/v1` in
+`frontend/.env.local` (copy `.env.local.example`). On Vercel, leave it unset (same-origin `/api/v1`).
+
 Then open <http://localhost:3000> and sign in with an account created by
 `python -m scripts.create_admin` (see below). No credentials are published in this repository.
 
-API documentation is served at <http://localhost:8000/docs>; readiness (database, PostGIS,
-migrations) at <http://localhost:8000/health/db>.
+API documentation is served at <http://localhost:8000/api/docs>; readiness (database, PostGIS,
+migrations) at <http://localhost:8000/api/v1/health/db>.
 
 **Documentation:** [System audit](docs/SYSTEM_AUDIT.md) ·
 [Supabase setup & backups](docs/SUPABASE_SETUP.md) ·
+[Vercel deployment & retraining worker](docs/DEPLOYMENT_VERCEL.md) ·
 [ML training & evaluation](docs/ML_TRAINING_AND_EVALUATION.md) ·
 [Adviser demo checklist](docs/ADVISER_DEMO_CHECKLIST.md)
 
@@ -92,8 +96,9 @@ wco-system/
 
 ```bash
 cd backend
-python3.11 -m venv venv
-./venv/bin/pip install -r requirements.txt
+python3.11 -m venv venv                        # 3.11 or 3.12 (Vercel runs 3.12)
+./venv/bin/pip install -r requirements-dev.txt  # API + PyTorch (training worker) + tests
+# requirements.txt = API only (what Vercel installs); requirements-worker.txt = + PyTorch
 ```
 
 Create `backend/.env` from the template (never committed):
@@ -167,7 +172,9 @@ cd backend
 batch retraining** after the change is committed. Bursts of edits are coalesced
 (`RETRAIN_DEBOUNCE_SECONDS`, default 20 s). Each run retrains from scratch with a chronological split,
 evaluates on held-out weeks against naive baselines, stores the version in the database, and activates it
-only if training succeeds. Manual retraining: **Admin → Retrain now**, or `POST /api/v1/forecast/train`.
+only if training succeeds. Locally the API trains in-process; on Vercel the API only queues jobs and the
+worker trains them (`./venv/bin/python -m scripts.retrain_worker`; see docs/DEPLOYMENT_VERCEL.md).
+Manual retraining: **Admin → Retrain now**, or `POST /api/v1/forecast/train`.
 Status: **Admin → LSTM Forecast Model** or `GET /api/v1/forecast/training-status`.
 Details and limitations: [docs/ML_TRAINING_AND_EVALUATION.md](docs/ML_TRAINING_AND_EVALUATION.md).
 
@@ -175,12 +182,12 @@ Details and limitations: [docs/ML_TRAINING_AND_EVALUATION.md](docs/ML_TRAINING_A
 
 ## Deployment
 
-- **Frontend** deploys to Vercel from `main`. Root Directory must be set to `frontend`
-  in project settings, and `NEXT_PUBLIC_API_BASE` set in environment variables.
-- **Backend** has a `Procfile` ready for Railway or Render (one worker). Set `DATABASE_URL`,
-  **`JWT_SECRET` (required — the API will not start without it)**, and add the deployed
-  frontend's origin to `CORS_ORIGINS`. Run `alembic upgrade head` against the database before
-  deploying new code. Trained models are stored in the database, so they survive redeploys.
+- **Vercel (one project, two Services):** root `vercel.json` routes `/api/*` to the FastAPI service and
+  everything else to Next.js. Project Root Directory = repository root. Full steps, environment
+  variables and the retraining worker: [docs/DEPLOYMENT_VERCEL.md](docs/DEPLOYMENT_VERCEL.md).
+- **`JWT_SECRET` is required** (the API won't start without it). Run `alembic upgrade head` yourself before
+  deploying code that adds a migration; deployments never migrate automatically.
+- The `Procfile` (`web` + `worker`) still supports Render/Railway-style hosts.
 
 ---
 

@@ -22,3 +22,6 @@ node_modules/
 
 # Claude Code local settings (machine-specific paths)
 .claude/
+
+# Vercel CLI local state
+.vercel/
