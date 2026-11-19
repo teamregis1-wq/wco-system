@@ -39,10 +39,14 @@ TABLES = [
 
 
 def upgrade() -> None:
+    if op.get_bind().dialect.name != "postgresql":
+        return  # RLS is PostgreSQL-only; skipped on the SQLite test database.
     for table in TABLES:
         op.execute(f"ALTER TABLE IF EXISTS public.{table} ENABLE ROW LEVEL SECURITY")
 
 
 def downgrade() -> None:
+    if op.get_bind().dialect.name != "postgresql":
+        return  # RLS is PostgreSQL-only; skipped on the SQLite test database.
     for table in TABLES:
         op.execute(f"ALTER TABLE IF EXISTS public.{table} DISABLE ROW LEVEL SECURITY")

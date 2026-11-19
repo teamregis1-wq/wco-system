@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.core.audit import log_action
 from app.core.database import get_db
 from app.core.security import require_role, get_current_user
+from app.models.establishment import Establishment
 from app.models.wco import WCOQualityTest
 from app.schemas.schemas import QualityTestCreate, QualityTestOut
 
@@ -31,6 +32,8 @@ def create_quality_test(
     db: Session = Depends(get_db),
     current_user=Depends(require_role("admin", "researcher")),
 ):
+    if db.get(Establishment, payload.establishment_id) is None:
+        raise HTTPException(status_code=404, detail="Establishment not found")
     test = WCOQualityTest(**payload.model_dump())
     db.add(test)
     log_action(db, current_user.email, current_user.id, "create", "quality_test",

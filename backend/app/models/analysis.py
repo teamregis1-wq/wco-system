@@ -81,7 +81,7 @@ class CandidateSite(Base):
 
 
 class RoadNetworkEdge(Base):
-    """A single edge of the Lipa City road graph imported via OSMnx.
+    """A single edge of the Batangas City road graph imported via OSMnx.
 
     Stored so the routing engine can rebuild the NetworkX graph without
     re-downloading from OpenStreetMap every time.

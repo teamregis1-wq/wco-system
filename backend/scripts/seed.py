@@ -3,13 +3,15 @@
 Run AFTER migrations:  python -m scripts.seed
 
 Generates:
-  - 1 admin user (admin@wco.local / admin12345)
-  - 120 establishments around Lipa City (60 restaurant, 40 fast_food, 20 manufacturer)
+  - admin/researcher accounts only if SEED_ADMIN_PASSWORD / SEED_RESEARCHER_PASSWORD are set
+  - 120 establishments randomly scattered around Batangas City centre (some land in the bay)
   - 52 weeks of WCO generation per establishment (~6,240 rows) with realistic
     trend + weekly seasonality + noise, so the LSTM has a genuine signal to learn
   - quality tests, a few candidate sites, and a small RSM simulation grid
 
-Re-running wipes and regenerates (safe for development only).
+DESTRUCTIVE: wipes users and data tables, then regenerates. Development only;
+requires --i-understand-this-deletes-data and typing the database host.
+All generated data is labelled data_source='synthetic' and consent is not recorded.
 """
 import math
 import random
@@ -74,20 +76,17 @@ def wipe(db: Session) -> None:
 
 
 def seed_users(db: Session) -> None:
-    db.add(User(
-        email="admin@wco.local",
-        full_name="System Admin",
-        hashed_password=hash_password("admin12345"),
-        role="admin",
-    ))
-    db.add(User(
-        email="researcher@wco.local",
-        full_name="Research Lead",
-        hashed_password=hash_password("research12345"),
-        role="researcher",
-    ))
+    """Create accounts only when passwords are supplied via the environment
+    (SEED_ADMIN_PASSWORD / SEED_RESEARCHER_PASSWORD, 12+ chars). Passwords are
+    never hardcoded or printed."""
+    from scripts._destructive_guard import seed_password
+    for email, name, role, env in [("admin@wco.local", "System Admin", "admin", "SEED_ADMIN_PASSWORD"),
+                                   ("researcher@wco.local", "Research Lead", "researcher", "SEED_RESEARCHER_PASSWORD")]:
+        pw = seed_password(env)
+        if pw:
+            db.add(User(email=email, full_name=name, hashed_password=hash_password(pw), role=role))
+            print(f"  user: {email} ({role})")
     db.commit()
-    print("  users: admin@wco.local / admin12345  (and researcher@wco.local)")
 
 
 def seed_establishments(db: Session) -> list[Establishment]:
@@ -109,8 +108,9 @@ def seed_establishments(db: Session) -> list[Establishment]:
                 longitude=round(lng, 6),
                 geom=ST_SetSRID(ST_MakePoint(lng, lat), 4326),
                 seating_capacity=random.choice([0, 20, 40, 60, 120]),
-                consent_given=True,
+                consent_given=False,
                 is_active=True,
+                data_source="synthetic",
             )
             db.add(e)
             estabs.append(e)
@@ -138,6 +138,7 @@ def seed_wco_records(db: Session, estabs: list[Establishment]) -> None:
                 establishment_id=e.id,
                 week_date=d,
                 quantity_liters=round(qty, 2),
+                data_source="synthetic",
             ))
             total += 1
         # one quality test per establishment
@@ -155,7 +156,7 @@ def seed_wco_records(db: Session, estabs: list[Establishment]) -> None:
 
 def seed_candidate_sites(db: Session) -> None:
     sites = [
-        ("Lipa Biodiesel Hub (proposed)", "Near industrial zone, good road access"),
+        ("Batangas Biodiesel Hub (proposed)", "Near industrial zone, good road access"),
         ("Marawoy Processing Site", "Central to high-volume fast-food cluster"),
         ("Sabang Collection Depot", "Edge-of-city, lower land cost"),
     ]
@@ -208,7 +209,8 @@ def seed_simulations(db: Session) -> None:
 
 def main() -> None:
     # Create tables if migrations haven't been run (convenience for first run).
-    Base.metadata.create_all(bind=engine)
+    from scripts._destructive_guard import confirm_destructive
+    confirm_destructive(engine, "seed.py")
     db = SessionLocal()
     try:
         print("Seeding database...")

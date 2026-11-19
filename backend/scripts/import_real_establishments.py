@@ -1,10 +1,16 @@
 """
-Final Batangas City establishment import.
+LEGACY, DESTRUCTIVE Batangas City establishment import (wipes data tables first).
+
+Prefer the additive loader for demos:  python -m scripts.load_demo_data
+This script now requires --i-understand-this-deletes-data plus typing the
+database host, labels everything data_source='synthetic', and records
+consent_given=False.
 
 Strategy:
-  - Real, verified coordinates for all 120 establishments (map accuracy)
-  - High-variance synthetic WCO data for LSTM training (R² target: 0.92+)
-  - Development sign-in accounts, created only if they don't already exist
+  - Approximate coordinates, manually placed near public landmarks for 120
+    named businesses (NOT field-verified; see data/demo_establishment_catalog.csv)
+  - Synthetic WCO quantities generated from an assumed trend + 13-week cycle + noise
+  - Development accounts only if SEED_ADMIN_PASSWORD / SEED_RESEARCHER_PASSWORD are set
 
 Key difference from v2: each establishment gets a unique base volume
 drawn from a WIDE range within its type, so the LSTM sees genuine
@@ -33,7 +39,7 @@ from app.models import (
 
 random.seed(42)  # same seed as original good run
 
-# ── VERIFIED COORDINATES ─────────────────────────────────────────────────────
+# ── APPROXIMATE COORDINATES (manually placed; not field-verified) ─────────────────────────────────────────────────────
 # Anchors (confirmed via OpenStreetMap / CoordinatesFinder):
 #   SM City Batangas        13.75554, 121.06878  Pallocan West
 #   Jollibee National Hwy   13.77146, 121.06542  Kumintang Ibaba
@@ -192,8 +198,8 @@ MANUFACTURERS = [
 
 # ── WIDE-VARIANCE WCO PROFILES ───────────────────────────────────────────────
 # Each establishment draws its base from a WIDE range within its type.
-# This is what gave the original run R²=0.92 — the model sees genuine
-# differences between establishments, not a narrow cluster.
+# Wider base ranges make series differ more between establishments. Note: a
+# high R² on this synthetic data reflects the simple generator, not real-world accuracy.
 TYPE_PROFILE = {
     "restaurant":        {"base_lo": 20,  "base_hi": 55,  "amp": 8,  "trend": 0.10},
     "fast_food":         {"base_lo": 40,  "base_hi": 80,  "amp": 14, "trend": 0.18},
@@ -203,7 +209,7 @@ TYPE_PROFILE = {
 
 def generate_wco(db, estab, weeks=52):
     prof = TYPE_PROFILE[estab.type]
-    # Wide uniform draw — key to good R²
+    # Wide uniform draw of each establishment's base level (assumption)
     base = random.uniform(prof["base_lo"], prof["base_hi"])
     start = date.today() - timedelta(weeks=weeks)
     count = 0
@@ -213,12 +219,13 @@ def generate_wco(db, estab, weeks=52):
             base
             + prof["trend"] * w
             + prof["amp"] * math.sin(2 * math.pi * w / 13.0)
-            + random.gauss(0, prof["amp"] * 0.3)   # slightly more noise = better learning
+            + random.gauss(0, prof["amp"] * 0.3)   # noise sd = 0.3 × amplitude (assumption)
         )
         db.add(WCOGenerationRecord(
             establishment_id=estab.id,
             week_date=d,
             quantity_liters=round(qty, 2),
+            data_source="synthetic",
         ))
         count += 1
     db.add(WCOQualityTest(
@@ -255,7 +262,7 @@ def import_group(db, data, etype, prefix):
             geom=ST_SetSRID(ST_MakePoint(lng, lat), 4326),
             seating_capacity=random.choice([20, 40, 60, 80, 120])
                 if etype != "food_manufacturer" else 0,
-            consent_given=True, is_active=True,
+            consent_given=False, is_active=True, data_source="synthetic",
         )
         db.add(e)
         out.append(e)
@@ -288,28 +295,26 @@ def seed_sites(db):
     print(f"  Candidate sites: {len(sites)}")
 
 
-DEV_USERS = [
-    ("admin@wco.local",      "System Admin",  "admin12345",    "admin"),
-    ("researcher@wco.local", "Research Lead", "research12345", "researcher"),
-]
-
-
 def seed_users(db):
-    """Create the development accounts. Skips any that already exist, so the
-    script can be re-run without hitting the unique-email constraint."""
+    """Create development accounts only when passwords are supplied via the
+    environment (SEED_ADMIN_PASSWORD / SEED_RESEARCHER_PASSWORD, 12+ chars).
+    Existing accounts are left untouched. Passwords are never hardcoded."""
+    from scripts._destructive_guard import seed_password
     existing = {email for (email,) in db.query(User.email).all()}
     created = []
-    for email, name, password, role in DEV_USERS:
-        if email not in existing:
-            db.add(User(email=email, full_name=name,
-                        hashed_password=hash_password(password), role=role))
+    for email, name, role, env in [("admin@wco.local", "System Admin", "admin", "SEED_ADMIN_PASSWORD"),
+                                   ("researcher@wco.local", "Research Lead", "researcher", "SEED_RESEARCHER_PASSWORD")]:
+        pw = seed_password(env)
+        if email not in existing and pw:
+            db.add(User(email=email, full_name=name, hashed_password=hash_password(pw), role=role))
             created.append(email)
     db.commit()
-    print(f"  accounts: {', '.join(created) if created else 'already present'}")
+    print(f"  accounts created: {', '.join(created) if created else 'none'}")
 
 
 def main():
-    Base.metadata.create_all(bind=engine)
+    from scripts._destructive_guard import confirm_destructive
+    confirm_destructive(engine, "import_real_establishments.py")
     db = SessionLocal()
     try:
         clear(db)

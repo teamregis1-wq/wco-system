@@ -18,8 +18,12 @@ depends_on = None
 
 
 def upgrade() -> None:
+    if op.get_bind().dialect.name != "postgresql":
+        return  # RLS is PostgreSQL-only; skipped on the SQLite test database.
     op.execute("ALTER TABLE public.saved_routes ENABLE ROW LEVEL SECURITY")
 
 
 def downgrade() -> None:
+    if op.get_bind().dialect.name != "postgresql":
+        return  # RLS is PostgreSQL-only; skipped on the SQLite test database.
     op.execute("ALTER TABLE public.saved_routes DISABLE ROW LEVEL SECURITY")

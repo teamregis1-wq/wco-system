@@ -1,4 +1,4 @@
-"""Food establishments — the core study population (120 in Lipa City).
+"""Food establishments — the core study population (120 in Batangas City).
 
 Each row stores a PostGIS POINT geometry (geom) in addition to plain
 lat/lng floats. The geometry enables spatial queries (distance, within-radius,
@@ -8,7 +8,7 @@ frontend map without a geometry conversion step.
 from datetime import datetime, timezone
 
 from geoalchemy2 import Geometry
-from sqlalchemy import String, Float, DateTime, Boolean, Integer
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, Integer, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -38,7 +38,12 @@ class Establishment(Base):
     business_hours: Mapped[str | None] = mapped_column(String(120), nullable=True)
     seating_capacity: Mapped[int | None] = mapped_column(Integer, nullable=True)
     contact_info: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # True only when participation consent has actually been recorded.
     consent_given: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Provenance of this row: 'synthetic' | 'observed' | 'unspecified'.
+    data_source: Mapped[str] = mapped_column(
+        String(20), default="unspecified", server_default=text("'unspecified'")
+    )
 
     # Soft delete: set False instead of removing the row, so history survives.
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -51,4 +56,15 @@ class Establishment(Base):
     )
     quality_tests: Mapped[list["WCOQualityTest"]] = relationship(
         back_populates="establishment", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "latitude >= -90 AND latitude <= 90 AND longitude >= -180 AND longitude <= 180",
+            name="ck_establishments_coordinates",
+        ),
+        CheckConstraint(
+            "data_source IN ('synthetic', 'observed', 'unspecified')",
+            name="ck_establishments_data_source",
+        ),
     )
