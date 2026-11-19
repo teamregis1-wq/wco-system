@@ -7,6 +7,7 @@ import { LogoMark, LogoWordmark } from "@/components/Logo";
 import { brandFont } from "@/lib/fonts";
 import AuthPopover from "@/components/AuthPopover";
 import LandingBackground from "@/components/LandingBackground";
+import MiniMapCard from "@/components/MiniMapCard";
 
 const FEATURES = [
   {
@@ -173,7 +174,7 @@ export default function LandingPage() {
       <nav style={S.nav}>
         <LogoWordmark size={38} color="white" subtitleColor="rgba(255,255,255,0.55)" />
         <div style={{ display: "flex", alignItems: "center", gap: 10, position: "relative" }}>
-          {user && <span style={S.navHello}>Signed in as {user.full_name}</span>}
+          {user && <span className="wco-hide-phone" style={S.navHello}>Signed in as {user.full_name}</span>}
           {user
             ? <Link href="/map" style={S.navBtn}>Open App</Link>
             : <button onClick={() => setAuthOpen(v => !v)} style={{ ...S.navBtn, border: "none", cursor: "pointer", fontFamily: "inherit" }}>Sign In</button>
@@ -220,6 +221,9 @@ export default function LandingPage() {
             .wco-scroll-arrow { animation: wco-bounce 1.6s ease-in-out infinite; }
           `}</style>
         </div>
+
+        {/* Floating minimap preview (in normal flow, so it never covers text) */}
+        <MiniMapCard />
 
         {/* Stats strip */}
         <div style={S.statsRow}>

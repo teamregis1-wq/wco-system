@@ -21,6 +21,28 @@ interface Props {
   geometry?: [number, number][] | null;
 }
 
+/** For PDF export: on "wco:print-prepare" re-measure and fit the whole route;
+ *  on "wco:print-done" restore the previous view. */
+function PrintFit({ points }: { points: [number, number][] }) {
+  const map = useMap();
+  useEffect(() => {
+    let saved: { c: ReturnType<typeof map.getCenter>; z: number } | null = null;
+    const prepare = () => {
+      saved = { c: map.getCenter(), z: map.getZoom() };
+      map.invalidateSize({ animate: false });
+      if (points.length > 1) map.fitBounds(points, { padding: [20, 20], animate: false });
+    };
+    const done = () => {
+      map.invalidateSize({ animate: false });
+      if (saved) map.setView(saved.c, saved.z, { animate: false });
+    };
+    window.addEventListener("wco:print-prepare", prepare);
+    window.addEventListener("wco:print-done", done);
+    return () => { window.removeEventListener("wco:print-prepare", prepare); window.removeEventListener("wco:print-done", done); };
+  }, [map, points]);
+  return null;
+}
+
 /** Re-measure the map after the container is resized (expand/collapse). */
 function ResizeFix({ expanded }: { expanded: boolean }) {
   const map = useMap();
@@ -100,6 +122,7 @@ export default function RouteMapView({ depotLat, depotLng, depotName, stops, geo
               attribution='&copy; OpenStreetMap contributors'
             />
             <ResizeFix expanded={expanded} />
+            <PrintFit points={roadPath ?? straightPath} />
 
             {/* Road-following polyline (OSRM) — solid line */}
             {roadPath && (

@@ -8,6 +8,7 @@ import { API_BASE, getToken } from "@/lib/api";
 import { useAuth, type Role } from "@/lib/auth-context";
 import { toast, Toaster } from "@/components/Toast";
 import { downloadCSV } from "@/lib/csv";
+import { glass, glassStrong } from "@/lib/theme";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -113,7 +114,7 @@ function RoleBadge({ role }: { role: Role }) {
     <span style={{
       display: "inline-flex", alignItems: "center", gap: 5,
       fontSize: 11, fontWeight: 700, padding: "3px 10px 3px 8px", borderRadius: 99,
-      background: m.bg, color: m.color, border: `1px solid ${m.border}`, letterSpacing: "0.04em",
+      background: m.bg, color: m.color, letterSpacing: "0.04em",
       textTransform: "uppercase",
     }}>
       <RoleIcon role={role} size={12} />
@@ -159,12 +160,15 @@ function RoleOverview({ counts, active, onSelect }: {
               textAlign: "left", cursor: "pointer", fontFamily: "inherit",
               display: "flex", flexDirection: "column", justifyContent: "flex-start", alignItems: "stretch",
               position: "relative", overflow: "hidden", borderRadius: 14, padding: "14px 16px",
-              background: on ? m.bg : "white",
-              border: `1.5px solid ${on ? m.color : "#e2e8f0"}`,
-              boxShadow: on ? `0 6px 18px ${m.border}66` : "0 1px 2px rgba(0,0,0,0.04)",
+              background: on ? m.bg : "rgba(255,255,255,0.55)",
+              backdropFilter: "blur(14px) saturate(160%)", WebkitBackdropFilter: "blur(14px) saturate(160%)",
+              border: "none",
+              boxShadow: on
+                ? `0 12px 28px ${m.border}88, inset 0 1px 0 rgba(255,255,255,0.7)`
+                : "0 8px 22px rgba(15,110,86,0.08), inset 0 1px 0 rgba(255,255,255,0.7)",
+              transform: on ? "translateY(-2px)" : "none",
               transition: "all .18s ease",
             }}>
-            <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 4, background: m.gradient }} />
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
               <span style={{ width: 34, height: 34, borderRadius: 10, background: m.gradient,
                              display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
@@ -201,8 +205,9 @@ function RoleTabs({ counts, total, active, onSelect }: {
 }) {
   const tabs: (Role | "all")[] = ["all", ...ROLE_ORDER];
   return (
-    <div role="tablist" style={{ display: "inline-flex", gap: 4, padding: 4, borderRadius: 12,
-                                 background: "#f1f5f9", marginBottom: 12, flexWrap: "wrap" }}>
+    <div role="tablist" style={{ display: "inline-flex", gap: 4, padding: 4, borderRadius: 14,
+                                 background: "rgba(255,255,255,0.5)", marginBottom: 12, flexWrap: "wrap",
+                                 boxShadow: "inset 0 1px 2px rgba(15,110,86,0.08)" }}>
       {tabs.map(t => {
         const on = active === t;
         const m = t === "all" ? null : ROLE_META[t];
@@ -231,14 +236,15 @@ function RoleTabs({ counts, total, active, onSelect }: {
 
 // ── Stat card ─────────────────────────────────────────────────────────────────
 
-function StatCard({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
+function StatCard({ label, value, unit, sub }: { label: string; value: string | number; unit?: string; sub?: string }) {
   return (
     <div style={{ ...cardStyle, padding: "14px 18px" }}>
       <div style={{ fontSize: 11, fontWeight: 700, color: "#718096", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>
         {label}
       </div>
-      <div style={{ fontSize: 28, fontWeight: 900, color: "#1a202c", fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>
+      <div style={{ fontSize: "clamp(19px, 5.6vw, 28px)", fontWeight: 900, color: "#1a202c", fontVariantNumeric: "tabular-nums", lineHeight: 1.05, whiteSpace: "nowrap" }}>
         {typeof value === "number" ? value.toLocaleString() : value}
+        {unit && <span style={{ fontSize: 13, fontWeight: 700, color: "#94a3b8", marginLeft: 4 }}>{unit}</span>}
       </div>
       {sub && <div style={{ fontSize: 11, color: "#a0aec0", marginTop: 4 }}>{sub}</div>}
     </div>
@@ -277,7 +283,7 @@ function AddUserModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
 
   return (
     <div style={S.modalOverlay} onClick={onClose}>
-      <div style={S.modal} onClick={e => e.stopPropagation()}>
+      <div className="wco-modal" style={S.modal} onClick={e => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
           <h2 style={{ fontSize: 18, fontWeight: 800, color: "#1a202c", margin: 0 }}>Add user</h2>
           <button onClick={onClose} style={S.iconBtn}>✕</button>
@@ -306,8 +312,10 @@ function AddUserModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
                     style={{
                       cursor: "pointer", fontFamily: "inherit", textAlign: "center", padding: "10px 8px",
                       display: "flex", flexDirection: "column", justifyContent: "flex-start", alignItems: "center",
-                      borderRadius: 12, border: `1.5px solid ${on ? m.color : "#e2e8f0"}`,
-                      background: on ? m.bg : "white", transition: "all .15s ease",
+                      borderRadius: 14, border: "none",
+                      background: on ? m.bg : "rgba(255,255,255,0.6)",
+                      boxShadow: on ? `0 10px 22px ${m.border}88` : "0 4px 12px rgba(15,110,86,0.08)",
+                      transition: "all .15s ease",
                     }}>
                     <span style={{ width: 30, height: 30, borderRadius: 9, margin: "0 auto 6px",
                                    display: "flex", alignItems: "center", justifyContent: "center",
@@ -404,9 +412,10 @@ function MetricRow({ label, m, highlight }: { label: string; m?: Metric; highlig
 
 function MetricTable({ title, note, rows }: { title: string; note: string; rows: [string, Metric | undefined, boolean?][] }) {
   return (
-    <div style={{ background: "#f8fafc", borderRadius: 10, padding: "10px 14px", border: "1px solid #e2e8f0" }}>
+    <div style={{ background: "rgba(255,255,255,0.6)", borderRadius: 10, padding: "10px 14px", border: "1px solid rgba(15,110,86,0.12)" }}>
       <div style={{ fontSize: 11, fontWeight: 800, color: "#1a202c", marginBottom: 2 }}>{title}</div>
       <div style={{ fontSize: 10.5, color: "#94a3b8", marginBottom: 6 }}>{note}</div>
+      <div style={{ overflowX: "auto" }}>
       <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse", fontVariantNumeric: "tabular-nums" }}>
         <thead>
           <tr style={{ fontSize: 10, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>
@@ -419,6 +428,7 @@ function MetricTable({ title, note, rows }: { title: string; note: string; rows:
         </thead>
         <tbody>{rows.map(([label, m, hi]) => <MetricRow key={label} label={label} m={m} highlight={hi} />)}</tbody>
       </table>
+      </div>
     </div>
   );
 }
@@ -541,7 +551,7 @@ function LSTMTrainingPanel() {
 
       {/* Evaluation */}
       {ev && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 10, marginBottom: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(300px, 100%), 1fr))", gap: 10, marginBottom: 12 }}>
           <MetricTable
             title="1-week-ahead, held-out test weeks"
             note={`${ev.test_samples ?? "?"} establishment-weeks never seen in training · errors in liters per establishment-week`}
@@ -577,6 +587,7 @@ function LSTMTrainingPanel() {
       {s && s.recent_jobs.length > 0 && (
         <div>
           <div style={{ fontSize: 10, fontWeight: 800, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 6 }}>Recent retraining jobs</div>
+          <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", fontSize: 11.5, borderCollapse: "collapse" }}>
             <tbody>
               {s.recent_jobs.map(j => (
@@ -596,6 +607,7 @@ function LSTMTrainingPanel() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </div>
@@ -680,13 +692,13 @@ function AdminDashboard() {
           <StatCard label="Users"            value={stats.total_users} />
           <StatCard label="Establishments"   value={stats.total_establishments} sub={`${stats.active_establishments} active`} />
           <StatCard label="WCO Records"      value={stats.total_wco_records} />
-          <StatCard label="Total WCO volume" value={`${stats.total_wco_liters.toLocaleString()} L`} sub="all time" />
+          <StatCard label="Total WCO volume" value={stats.total_wco_liters} unit="L" sub="all time" />
         </div>
       )}
 
       {/* User table */}
       <div style={cardStyle}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, gap: 10, flexWrap: "wrap" }}>
           <div>
             <div style={{ fontSize: 14, fontWeight: 800, color: "#1a202c" }}>Users</div>
             <div style={{ fontSize: 12, color: "#a0aec0" }}>{users.length} registered account{users.length !== 1 ? "s" : ""}</div>
@@ -718,7 +730,7 @@ function AdminDashboard() {
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
-                <tr style={{ background: "#f8fafc" }}>
+                <tr style={{ background: "rgba(255,255,255,0.6)" }}>
                   {["User", "Role", "Joined", "Actions"].map(h => (
                     <th key={h} style={S.th}>{h}</th>
                   ))}
@@ -741,8 +753,7 @@ function AdminDashboard() {
                   const isSelf = u.id === me?.id;
                   const isDeleting = deleteConfirm === u.id;
                   return (
-                    <tr key={u.id} style={{ background: isSelf ? "#f0fdf4" : i % 2 === 0 ? "white" : "#fafafa",
-                                            boxShadow: `inset 3px 0 0 ${(ROLE_META[u.role] ?? ROLE_META.viewer).color}` }}>
+                    <tr key={u.id} style={{ background: isSelf ? "rgba(220,252,231,0.55)" : i % 2 === 0 ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.32)" }}>
                       <td style={S.td}>
                         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                           <Avatar name={u.full_name} role={u.role} />
@@ -765,8 +776,8 @@ function AdminDashboard() {
                             disabled={roleLoading === u.id}
                             onChange={e => changeRole(u.id, e.target.value as Role)}
                             style={{
-                              fontSize: 12, fontWeight: 700, padding: "3px 8px",
-                              borderRadius: 8, border: "1px solid #e2e8f0",
+                              fontSize: 12, fontWeight: 700, padding: "4px 8px",
+                              borderRadius: 9, border: "none",
                               background: ROLE_META[u.role]?.bg ?? "#f3f4f6",
                               color: ROLE_META[u.role]?.color ?? "#374151",
                               cursor: roleLoading === u.id ? "wait" : "pointer",
@@ -824,7 +835,7 @@ function AdminDashboard() {
               { value: "user",           label: "Users" },
             ]).map(({ value, label: lbl }) => (
               <button key={value} onClick={() => { setAuditFilter(value); loadAudit(value); }}
-                style={{ fontSize: 11, padding: "4px 10px", borderRadius: 7, border: "1px solid #e2e8f0", cursor: "pointer", fontFamily: "inherit",
+                style={{ fontSize: 11, padding: "4px 10px", borderRadius: 7, border: "1px solid rgba(15,110,86,0.12)", cursor: "pointer", fontFamily: "inherit",
                   background: auditFilter === value ? "#0f6e56" : "white",
                   color: auditFilter === value ? "white" : "#64748b", fontWeight: 600 }}>
                 {lbl}
@@ -838,10 +849,10 @@ function AdminDashboard() {
         ) : (
           <div style={{ overflowX: "auto", maxHeight: 340, overflowY: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead style={{ position: "sticky", top: 0, background: "#f8fafc", zIndex: 1 }}>
+              <thead style={{ position: "sticky", top: 0, background: "rgba(244,251,248,0.95)", zIndex: 1 }}>
                 <tr>
                   {["Timestamp", "User", "Action", "Resource Type", "Record ID", "Details"].map(h => (
-                    <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "#718096", textTransform: "uppercase", letterSpacing: "0.05em", borderBottom: "1px solid #e2e8f0", whiteSpace: "nowrap" }}>{h}</th>
+                    <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "#718096", textTransform: "uppercase", letterSpacing: "0.05em", borderBottom: "1px solid rgba(15,110,86,0.12)", whiteSpace: "nowrap" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -849,7 +860,7 @@ function AdminDashboard() {
                 {auditLogs.map((a, i) => {
                   const actionColor: Record<string, string> = { create: "#065f46", update: "#1d4ed8", delete: "#dc2626" };
                   return (
-                    <tr key={a.id} style={{ background: i % 2 === 0 ? "white" : "#fafafa" }}>
+                    <tr key={a.id} style={{ background: i % 2 === 0 ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.32)" }}>
                       <td style={{ padding: "8px 12px", color: "#a0aec0", fontSize: 11, whiteSpace: "nowrap" }}>
                         {new Date(a.created_at).toLocaleString("en-PH", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
                       </td>
@@ -874,7 +885,7 @@ function AdminDashboard() {
                             <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{a.details}</div>
                             <button
                               onClick={() => setDetailsEntry(a)}
-                              style={{ fontSize: 10, padding: "2px 8px", borderRadius: 6, border: "1px solid #e2e8f0", background: "white", cursor: "pointer", color: "#374151", whiteSpace: "nowrap", fontFamily: "inherit", flexShrink: 0, fontWeight: 600 }}
+                              style={{ fontSize: 10, padding: "2px 8px", borderRadius: 6, border: "1px solid rgba(15,110,86,0.12)", background: "white", cursor: "pointer", color: "#374151", whiteSpace: "nowrap", fontFamily: "inherit", flexShrink: 0, fontWeight: 600 }}
                             >
                               View
                             </button>
@@ -898,7 +909,7 @@ function AdminDashboard() {
 
       {detailsEntry && (
         <div style={S.modalOverlay} onClick={() => setDetailsEntry(null)}>
-          <div style={{ ...S.modal, width: 480 }} onClick={e => e.stopPropagation()}>
+          <div className="wco-modal" style={{ ...S.modal, width: 480 }} onClick={e => e.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
               <div>
                 <div style={{ fontSize: 15, fontWeight: 800, color: "#1a202c" }}>Audit Entry #{detailsEntry.id}</div>
@@ -921,7 +932,7 @@ function AdminDashboard() {
               ))}
               <div>
                 <div style={{ color: "#a0aec0", fontWeight: 600, marginBottom: 6 }}>Details</div>
-                <div style={{ background: "#f8fafc", borderRadius: 10, padding: "12px 14px", fontSize: 12, color: "#374151", wordBreak: "break-word", whiteSpace: "pre-wrap", maxHeight: 220, overflowY: "auto", border: "1px solid #e2e8f0", lineHeight: 1.6 }}>
+                <div style={{ background: "rgba(255,255,255,0.6)", borderRadius: 10, padding: "12px 14px", fontSize: 12, color: "#374151", wordBreak: "break-word", whiteSpace: "pre-wrap", maxHeight: 220, overflowY: "auto", border: "1px solid rgba(15,110,86,0.12)", lineHeight: 1.6 }}>
                   {detailsEntry.details ?? "—"}
                 </div>
               </div>
@@ -952,23 +963,15 @@ export default function AdminPage() {
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 const S: Record<string, React.CSSProperties> = {
-  card: {
-    background: "white", borderRadius: 16, padding: 20,
-    boxShadow: "0 1px 3px rgba(0,0,0,0.04), 0 4px 16px rgba(0,0,0,0.05)",
-    border: "1px solid rgba(0,0,0,0.06)",
-  },
-  statCard: {
-    background: "white", borderRadius: 14, padding: "16px 20px",
-    boxShadow: "0 1px 3px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.05)",
-    border: "1px solid rgba(0,0,0,0.06)",
-  },
+  card: { ...glass, borderRadius: 18, padding: 20 },
+  statCard: { ...glass, borderRadius: 16, padding: "16px 20px" },
   th: {
     padding: "10px 14px", textAlign: "left", fontSize: 11,
     fontWeight: 700, color: "#718096", letterSpacing: "0.05em",
-    textTransform: "uppercase", borderBottom: "1px solid #e2e8f0",
+    textTransform: "uppercase", borderBottom: "1px solid rgba(15,110,86,0.12)",
     whiteSpace: "nowrap",
   },
-  td: { padding: "11px 14px", borderBottom: "1px solid #f0f0f0", verticalAlign: "middle" },
+  td: { padding: "11px 14px", borderBottom: "1px solid rgba(15,110,86,0.07)", verticalAlign: "middle" },
   label: { display: "block", fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 5 },
   input: {
     width: "100%", padding: "9px 12px", borderRadius: 9,
@@ -987,7 +990,7 @@ const S: Record<string, React.CSSProperties> = {
   },
   ghostBtn: {
     padding: "5px 12px", borderRadius: 7,
-    border: "1px solid #e2e8f0", background: "white",
+    border: "1px solid rgba(15,110,86,0.12)", background: "white",
     color: "#718096", fontWeight: 600, fontSize: 12, cursor: "pointer",
   },
   iconBtn: {
@@ -996,12 +999,13 @@ const S: Record<string, React.CSSProperties> = {
   },
   modalOverlay: {
     position: "fixed", inset: 0,
-    background: "rgba(0,0,0,0.4)", backdropFilter: "blur(4px)",
+    background: "rgba(6,40,30,0.35)", backdropFilter: "blur(4px)",
     display: "flex", alignItems: "center", justifyContent: "center",
     zIndex: 9999,
   },
   modal: {
-    background: "white", borderRadius: 20, padding: 28, width: 420,
-    boxShadow: "0 20px 60px rgba(0,0,0,0.2)",
+    ...glassStrong, borderRadius: 22, padding: 28, width: 420, maxWidth: "calc(100vw - 24px)",
+    maxHeight: "92vh", overflowY: "auto",
+    boxShadow: "0 24px 70px rgba(6,40,30,0.28), inset 0 1px 0 rgba(255,255,255,0.7)",
   },
 } as Record<string, React.CSSProperties>;

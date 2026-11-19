@@ -16,9 +16,9 @@ const WCOMap = dynamic(() => import("@/components/WCOMap"), {
 export default function MappingPage() {
   return (
     <ProtectedRoute>
-      <div style={{ height: "100vh", display: "flex", flexDirection: "column", fontFamily: "system-ui, -apple-system, sans-serif" }}>
+      <div className="wco-map-page wco-app-bg" style={{ height: "100vh", display: "flex", flexDirection: "column", fontFamily: "system-ui, -apple-system, sans-serif" }}>
         <Navbar />
-        <div style={{ flex: 1, minHeight: 0 }}>
+        <div className="wco-map-body" style={{ flex: 1, minHeight: 0 }}>
           <WCOMap />
         </div>
       </div>

@@ -10,6 +10,7 @@ import { API_BASE, getToken } from "@/lib/api";
 import ForecastChart from "@/components/ForecastChart";
 import type { ForecastPoint } from "@/lib/api";
 import { toast, Toaster } from "@/components/Toast";
+import { glassStrong } from "@/lib/theme";
 import RetrainStatusBadge from "@/components/RetrainStatusBadge";
 import {
   parseCSV, validateEstablishments, validateWcoRecords,
@@ -302,7 +303,7 @@ function EstablishmentModal({
 
   return (
     <div style={MO.overlay} onClick={onClose}>
-      <div style={MO.modal} onClick={e => e.stopPropagation()}>
+      <div className="wco-modal" style={MO.modal} onClick={e => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
           <h2 style={{ fontSize: 18, fontWeight: 800, color: "#111827", margin: 0 }}>
             {editing ? "Edit establishment" : "Add establishment"}
@@ -545,7 +546,7 @@ function WCORecordsModal({
 
   return (
     <div style={MO.overlay} onClick={onClose}>
-      <div style={{ ...MO.modal, maxWidth: 640 }} onClick={e => e.stopPropagation()}>
+      <div className="wco-modal" style={{ ...MO.modal, maxWidth: 640 }} onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
           <div>
@@ -602,7 +603,7 @@ function WCORecordsModal({
 
         {/* Completeness badge */}
         {completeness && (
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, padding: "8px 14px", background: "#f8fafc", borderRadius: 10, border: "1px solid #e2e8f0" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, padding: "8px 14px", background: "rgba(255,255,255,0.6)", borderRadius: 10, border: "1px solid rgba(15,110,86,0.12)" }}>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 3 }}>Data completeness</div>
               <div style={{ height: 6, background: "#e2e8f0", borderRadius: 99, overflow: "hidden" }}>
@@ -625,7 +626,7 @@ function WCORecordsModal({
             { label: "Total (L)",   value: totalLiters.toLocaleString(undefined, { maximumFractionDigits: 1 }) },
             { label: "Avg / week",  value: records.length ? (totalLiters / records.length).toFixed(1) : "—" },
           ].map(s => (
-            <div key={s.label} style={{ flex: 1, background: "#f8fafc", borderRadius: 10, padding: "10px 14px", border: "1px solid #e2e8f0" }}>
+            <div key={s.label} style={{ flex: 1, background: "rgba(255,255,255,0.6)", borderRadius: 10, padding: "10px 14px", border: "1px solid rgba(15,110,86,0.12)" }}>
               <div style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 3 }}>{s.label}</div>
               <div style={{ fontSize: 20, fontWeight: 900, color: "#0f6e56", fontVariantNumeric: "tabular-nums" }}>{s.value}</div>
             </div>
@@ -722,15 +723,15 @@ function WCORecordsModal({
           <div style={{ overflowY: "auto", maxHeight: 280 }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
-                <tr style={{ background: "#f8fafc" }}>
+                <tr style={{ background: "rgba(255,255,255,0.6)" }}>
                   {["Week", "Liters", "Notes", ""].map(h => (
-                    <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em", borderBottom: "1px solid #e2e8f0", whiteSpace: "nowrap" }}>{h}</th>
+                    <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em", borderBottom: "1px solid rgba(15,110,86,0.12)", whiteSpace: "nowrap" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {records.map((r, i) => (
-                  <tr key={r.id} style={{ background: i % 2 === 0 ? "white" : "#fafafa" }}>
+                  <tr key={r.id} style={{ background: i % 2 === 0 ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.32)" }}>
                     <td style={{ padding: "9px 12px", borderBottom: "1px solid #f1f5f9", fontWeight: 600, color: "#1a202c", whiteSpace: "nowrap" }}>
                       {weekRangeLabel(r.week_date, r.week_end_date)}
                     </td>
@@ -862,7 +863,7 @@ function QualityTestsModal({ establishment, onClose }: { establishment: Establis
 
   return (
     <div style={MO.overlay} onClick={onClose}>
-      <div style={{ ...MO.modal, maxWidth: 660 }} onClick={e => e.stopPropagation()}>
+      <div className="wco-modal" style={{ ...MO.modal, maxWidth: 660 }} onClick={e => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
           <div>
             <h2 style={{ fontSize: 17, fontWeight: 800, color: "#111827", margin: "0 0 2px" }}>Quality Tests</h2>
@@ -934,9 +935,9 @@ function QualityTestsModal({ establishment, onClose }: { establishment: Establis
           <div style={{ overflowY: "auto", maxHeight: 300 }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
-                <tr style={{ background: "#f8fafc" }}>
+                <tr style={{ background: "rgba(255,255,255,0.6)" }}>
                   {["Sample date", "FFA %", "Viscosity (cP)", "Density (g/mL)", "Grade", ""].map(h => (
-                    <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em", borderBottom: "1px solid #e2e8f0" }}>{h}</th>
+                    <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em", borderBottom: "1px solid rgba(15,110,86,0.12)" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -944,7 +945,7 @@ function QualityTestsModal({ establishment, onClose }: { establishment: Establis
                 {tests.map((t, i) => {
                   const grade = ffaGrade(t.ffa_pct);
                   return (
-                    <tr key={t.id} style={{ background: i % 2 === 0 ? "white" : "#fafafa" }}>
+                    <tr key={t.id} style={{ background: i % 2 === 0 ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.32)" }}>
                       <td style={{ padding: "9px 12px", fontWeight: 600, color: "#1a202c" }}>
                         {new Date(t.sample_date).toLocaleDateString("en-PH", { year: "numeric", month: "short", day: "numeric" })}
                       </td>
@@ -1001,7 +1002,7 @@ function ForecastModal({ establishment, onClose }: { establishment: Establishmen
 
   return (
     <div style={MO.overlay} onClick={onClose}>
-      <div style={{ ...MO.modal, maxWidth: 740 }} onClick={e => e.stopPropagation()}>
+      <div className="wco-modal" style={{ ...MO.modal, maxWidth: 740 }} onClick={e => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
           <div>
             <h2 style={{ fontSize: 17, fontWeight: 800, color: "#111827", margin: "0 0 2px" }}>3-Month LSTM Forecast</h2>
@@ -1086,7 +1087,7 @@ function EstablishmentDetailModal({
 
   return (
     <div style={MO.overlay} onClick={onClose}>
-      <div style={{ ...MO.modal, maxWidth: 680 }} onClick={ev => ev.stopPropagation()}>
+      <div className="wco-modal" style={{ ...MO.modal, maxWidth: 680 }} onClick={ev => ev.stopPropagation()}>
         {/* Header */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -1444,7 +1445,7 @@ function EstablishmentsContent() {
               <div style={{ position: "fixed", inset: 0, zIndex: 98 }} onClick={() => setExportOpen(false)} />
               <div style={{
                 position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 99,
-                background: "white", borderRadius: 10, border: "1px solid #e2e8f0",
+                background: "white", borderRadius: 10, border: "1px solid rgba(15,110,86,0.12)",
                 boxShadow: "0 4px 16px rgba(0,0,0,0.10)", minWidth: 150, overflow: "hidden",
               }}>
                 {[
@@ -1558,7 +1559,7 @@ function EstablishmentsContent() {
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
-                <tr style={{ background: "#f8fafc" }}>
+                <tr style={{ background: "rgba(255,255,255,0.6)" }}>
                   {/* Select-all checkbox */}
                   <th style={{ ...TH, width: 40, paddingLeft: 16 }}>
                     <input
@@ -1608,7 +1609,7 @@ function EstablishmentsContent() {
                     </td>
                   </tr>
                 ) : sorted.map((e, i) => (
-                  <tr key={e.id} style={{ background: selected.has(e.id) ? "#f0fdf4" : i % 2 === 0 ? "white" : "#fafafa", opacity: e.is_active ? 1 : 0.5 }}>
+                  <tr key={e.id} style={{ background: selected.has(e.id) ? "#f0fdf4" : i % 2 === 0 ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.32)", opacity: e.is_active ? 1 : 0.5 }}>
                     <td style={{ ...TD, paddingLeft: 16, width: 40 }}>
                       <input type="checkbox" checked={selected.has(e.id)} onChange={() => toggleSelect(e.id)} style={{ cursor: "pointer" }} />
                     </td>
@@ -1697,7 +1698,7 @@ export default function EstablishmentsPage() {
 const TH: React.CSSProperties = {
   padding: "10px 16px", textAlign: "left", fontSize: 11,
   fontWeight: 700, color: "#64748b", letterSpacing: "0.05em",
-  textTransform: "uppercase", borderBottom: "1px solid #e2e8f0",
+  textTransform: "uppercase", borderBottom: "1px solid rgba(15,110,86,0.12)",
   whiteSpace: "nowrap",
 };
 const TD: React.CSSProperties = {
@@ -1706,15 +1707,15 @@ const TD: React.CSSProperties = {
 };
 const MO: Record<string, React.CSSProperties> = {
   overlay: {
-    position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)",
+    position: "fixed", inset: 0, background: "rgba(6,40,30,0.35)",
     backdropFilter: "blur(4px)", display: "flex",
     alignItems: "center", justifyContent: "center", zIndex: 9999,
     padding: 16,
   },
   modal: {
-    background: "white", borderRadius: 20, padding: 28,
+    ...glassStrong, borderRadius: 22, padding: 28,
     width: "100%", maxWidth: 560, maxHeight: "90vh",
     overflowY: "auto",
-    boxShadow: "0 20px 60px rgba(0,0,0,0.2)",
+    boxShadow: "0 24px 70px rgba(6,40,30,0.28), inset 0 1px 0 rgba(255,255,255,0.7)",
   },
 };

@@ -132,8 +132,9 @@ export default function LandingBackground() {
 
         /* Phones: the text column is narrow, so keep the background quieter. */
         @media (max-width: 640px) {
-          .wco-route, .wco-ping { opacity: 0.45; }
+          .wco-route, .wco-ping { display: none; }
           .wco-drop:nth-of-type(2n) { display: none; }
+          .wco-bg { opacity: 0.75; }
         }
 
         @media (prefers-reduced-motion: reduce) {

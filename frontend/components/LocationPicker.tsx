@@ -120,14 +120,14 @@ export default function LocationPicker({ lat, lng, onChange }: Props) {
       <div style={wrapperStyle}>
         {/* Search row */}
         <div style={{ position: "relative", marginBottom: 8 }}>
-          <div style={{ display: "flex", gap: 6 }}>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             <input
               value={query}
               onChange={e => setQuery(e.target.value)}
               onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); runSearch(); } }}
               placeholder="Search a place, street, or barangay…"
               style={{
-                flex: 1, fontSize: 12, padding: "7px 10px", borderRadius: 8,
+                flex: "1 1 160px", minWidth: 0, fontSize: 12, padding: "7px 10px", borderRadius: 8,
                 border: "1.5px solid #e2e8f0", outline: "none", fontFamily: "inherit",
               }}
             />

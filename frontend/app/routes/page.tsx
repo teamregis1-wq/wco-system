@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import Navbar from "@/components/Navbar";
 import { API_BASE, getToken } from "@/lib/api";
+import { glass, greenGradient } from "@/lib/theme";
 import { useAuth } from "@/lib/auth-context";
 
 const LocationPicker = dynamic(() => import("@/components/LocationPicker"), { ssr: false });
@@ -96,7 +97,7 @@ export default function RoutesPage() {
     <ProtectedRoute>
       <div style={{ height: "100vh", display: "flex", flexDirection: "column", fontFamily: "system-ui,-apple-system,sans-serif" }}>
         <Navbar />
-        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", background: "#f3f4f6" }}>
+        <div className="wco-app-bg" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
           <RoutesContent />
         </div>
       </div>
@@ -279,10 +280,10 @@ function RoutesContent() {
   );
 
   return (
-    <div style={{ maxWidth: 1200, margin: "0 auto", padding: 28 }}>
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 20 }}>
+    <div className="wco-page-pad" style={{ maxWidth: 1200, margin: "0 auto", padding: 28 }}>
+      <div className="wco-page-head" style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 20, gap: 16 }}>
         <div>
-          <h1 style={{ fontSize: 26, fontWeight: 900, color: "#111827", margin: "0 0 4px", letterSpacing: "-0.02em" }}>
+          <h1 style={{ fontSize: 26, fontWeight: 900, color: "#0b3d30", margin: "0 0 4px", letterSpacing: "-0.02em" }}>
             Collection Route Planner
           </h1>
           <p style={{ fontSize: 13, color: "#6b7280", margin: 0 }}>
@@ -290,15 +291,15 @@ function RoutesContent() {
           </p>
         </div>
         {/* Mode selector */}
-        <div style={{ display: "flex", background: "white", border: "1px solid #e2e8f0", borderRadius: 10, padding: 3, gap: 2 }}>
+        <div style={{ display: "flex", background: "rgba(255,255,255,0.6)", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)", border: "1px solid rgba(255,255,255,0.8)", borderRadius: 12, padding: 3, gap: 2 }}>
           {([["tsp", "Multi-stop TSP"], ["p2p", "Point-to-Point"]] as [RouteMode, string][]).map(([m, label]) => (
             <button
               key={m}
               onClick={() => { setMode(m); setResult(null); setP2pResult(null); setError(null); }}
               style={{
                 fontSize: 12, padding: "6px 14px", borderRadius: 8, border: "none", cursor: "pointer",
-                background: mode === m ? "#0f6e56" : "transparent",
-                color:      mode === m ? "white"   : "#64748b",
+                background: mode === m ? greenGradient : "transparent",
+                color:      mode === m ? "white"   : "#3b5f55",
                 fontWeight: 700, fontFamily: "inherit",
               }}
             >
@@ -308,13 +309,13 @@ function RoutesContent() {
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1.6fr", gap: 20, alignItems: "start" }}>
+      <div className="wco-stack" style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1.6fr)", gap: 20, alignItems: "start" }}>
         {/* Left panel */}
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
           {/* TSP-only: Depot config + Establishment checkboxes */}
           {mode === "tsp" && (<>
-            <div style={{ background: "white", borderRadius: 16, padding: 20, boxShadow: "0 1px 3px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.06)" }}>
+            <div style={{ ...glass, borderRadius: 20, padding: 20 }}>
               <div style={{ fontSize: 12, fontWeight: 800, color: "#1a202c", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 14 }}>Depot / Start Point</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 <div>
@@ -332,7 +333,7 @@ function RoutesContent() {
               </div>
             </div>
 
-            <div style={{ background: "white", borderRadius: 16, padding: 20, boxShadow: "0 1px 3px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.06)" }}>
+            <div style={{ ...glass, borderRadius: 20, padding: 20 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
                 <div style={{ fontSize: 12, fontWeight: 800, color: "#1a202c", textTransform: "uppercase", letterSpacing: "0.06em" }}>
                   Establishments
@@ -340,9 +341,9 @@ function RoutesContent() {
                 <span style={{ fontSize: 11, color: "#64748b" }}>{selected.size} selected</span>
               </div>
 
-              <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+              <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
                 <input
-                  style={{ ...inp, flex: 1 }}
+                  style={{ ...inp, flex: "1 1 160px", minWidth: 0 }}
                   placeholder="Search name or barangay…"
                   value={filterText}
                   onChange={e => setFilterText(e.target.value)}
@@ -418,7 +419,7 @@ function RoutesContent() {
 
           {/* P2P-only: From / To dropdowns */}
           {mode === "p2p" && (
-            <div style={{ background: "white", borderRadius: 16, padding: 20, boxShadow: "0 1px 3px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.06)" }}>
+            <div style={{ ...glass, borderRadius: 20, padding: 20 }}>
               <div style={{ fontSize: 12, fontWeight: 800, color: "#1a202c", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>
                 Select Establishments
               </div>
@@ -481,7 +482,7 @@ function RoutesContent() {
           )}
 
           {/* Route history */}
-          <div style={{ background: "white", borderRadius: 16, padding: 20, boxShadow: "0 1px 3px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.06)" }}>
+          <div style={{ ...glass, borderRadius: 20, padding: 20 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <div style={{ fontSize: 12, fontWeight: 800, color: "#1a202c", textTransform: "uppercase", letterSpacing: "0.06em" }}>
                 Route History
@@ -555,9 +556,9 @@ function RoutesContent() {
             const estMin = Math.round(p2pResult.distance_m / 1000 / 30 * 60);
             return (
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                <div style={{ background: "white", borderRadius: 16, padding: 20, boxShadow: "0 1px 3px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.06)" }}>
+                <div style={{ ...glass, borderRadius: 20, padding: 20 }}>
                   <div style={{ fontSize: 12, fontWeight: 800, color: "#1a202c", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 14 }}>Road Distance</div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
+                  <div className="wco-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
                     {[
                       { label: "Distance", value: distKm, unit: "km",  color: "#0369a1" },
                       { label: "Est. travel", value: `${estMin}`, unit: "min", color: "#d97706" },
@@ -590,7 +591,7 @@ function RoutesContent() {
           })()}
 
           {!result && !p2pResult && (
-            <div style={{ background: "white", borderRadius: 16, padding: 40, textAlign: "center", boxShadow: "0 1px 3px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.06)", color: "#94a3b8", fontSize: 14 }}>
+            <div style={{ ...glass, borderRadius: 20, padding: 40, textAlign: "center", color: "#94a3b8", fontSize: 14 }}>
               {mode === "tsp"
                 ? "Select establishments and click Compute Route to see a planned collection order (nearest-neighbour heuristic)."
                 : "Select a start and end establishment to get the road distance between them."}
@@ -598,11 +599,15 @@ function RoutesContent() {
           )}
 
           {result && (() => {
-            function exportRoutePDF() {
+            async function exportRoutePDF() {
               const style = document.createElement("style");
               style.id = "__route-print-style";
               style.textContent = `
+                /* While preparing: size the map to the printed width so tiles cover it */
+                body.wco-route-printing .route-map-wrapper { width: 6.27in !important; max-width: none !important; }
+                body.wco-route-printing .route-map-wrapper .leaflet-container { height: 240px !important; }
                 @media print {
+                  .leaflet-control-zoom { display: none !important; }
                   @page { margin: 1in; size: A4 portrait; }
                   body * { visibility: hidden !important; }
                   #route-print-area, #route-print-area * { visibility: visible !important; }
@@ -628,8 +633,15 @@ function RoutesContent() {
                 }
               `;
               document.head.appendChild(style);
+              document.body.classList.add("wco-route-printing");
+              window.dispatchEvent(new Event("wco:print-prepare"));
+              await new Promise(r => setTimeout(r, 1500));   // let tiles for the new size load
               window.print();
-              setTimeout(() => document.getElementById("__route-print-style")?.remove(), 1500);
+              setTimeout(() => {
+                document.body.classList.remove("wco-route-printing");
+                window.dispatchEvent(new Event("wco:print-done"));
+                document.getElementById("__route-print-style")?.remove();
+              }, 1500);
             }
             return (
             <div style={{ display: "flex", flexDirection: "column", gap: 16 }} id="route-print-area">
@@ -650,7 +662,7 @@ function RoutesContent() {
                   { label: "Est. duration",value: `${Math.round(result.estimated_duration_min / 60)}h ${Math.round(result.estimated_duration_min % 60)}m`, unit: "", color: "#d97706" },
                   { label: "Total WCO",    value: result.total_wco_liters.toLocaleString(undefined, { maximumFractionDigits: 1 }), unit: "L", color: "#0f6e56" },
                 ].map(({ label, value, unit, color }) => (
-                  <div key={label} style={{ background: "white", borderRadius: 14, padding: "14px 16px", boxShadow: "0 1px 3px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.06)" }}>
+                  <div key={label} style={{ ...glass, borderRadius: 18, padding: "14px 16px" }}>
                     <div style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>{label}</div>
                     <div style={{ fontSize: 22, fontWeight: 900, color, fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>
                       {value}<span style={{ fontSize: 12, fontWeight: 500, color: "#94a3b8", marginLeft: 3 }}>{unit}</span>
@@ -687,7 +699,7 @@ function RoutesContent() {
               </div>
 
               {/* Route stops table */}
-              <div style={{ background: "white", borderRadius: 16, overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.06)" }}>
+              <div style={{ ...glass, borderRadius: 20, overflow: "hidden" }}>
                 <div style={{ padding: "16px 20px", borderBottom: "1px solid #f1f5f9", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <div style={{ fontSize: 12, fontWeight: 800, color: "#1a202c", textTransform: "uppercase", letterSpacing: "0.06em" }}>Planned Stop Order</div>
                   <div style={{ display: "flex", alignItems: "center", gap: 12 }}>

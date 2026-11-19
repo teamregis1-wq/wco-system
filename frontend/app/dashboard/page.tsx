@@ -8,6 +8,7 @@ import {
 import ProtectedRoute from "@/components/ProtectedRoute";
 import Navbar from "@/components/Navbar";
 import { API_BASE, getToken } from "@/lib/api";
+import { glass, glassTile } from "@/lib/theme";
 
 const BASE = API_BASE;
 
@@ -40,6 +41,16 @@ interface Hotspot {
 interface WeeklyTotal {
   week_date: string;
   total_liters: number;
+  count: number;
+}
+
+/** Drop weeks where fewer than half of the usual number of establishments report:
+ *  their "total" is partial and would show as a false collapse at the chart's edge. */
+function completeWeeks<T>(rows: T[], countOf: (r: T) => number): { rows: T[]; dropped: number } {
+  if (!rows.length) return { rows, dropped: 0 };
+  const max = Math.max(...rows.map(countOf));
+  const kept = rows.filter(r => countOf(r) >= max * 0.5);
+  return { rows: kept, dropped: rows.length - kept.length };
 }
 
 interface WCOSummary {
@@ -62,24 +73,6 @@ interface AggregateForecastPoint {
   establishment_count: number;
 }
 
-/** Make the provenance of the displayed data explicit (e.g. synthetic demo data). */
-function DataSourceNotice({ counts }: { counts?: Record<string, number> }) {
-  if (!counts) return null;
-  const total = Object.values(counts).reduce((a, b) => a + b, 0);
-  const synthetic = counts.synthetic ?? 0;
-  const unspecified = counts.unspecified ?? 0;
-  if (!total || (!synthetic && !unspecified)) return null;
-  const pct = (n: number) => Math.round((n / total) * 100);
-  const text = synthetic
-    ? `${pct(synthetic)}% of WCO records are SYNTHETIC (generated for demonstration) — not measured quantities.`
-    : `${pct(unspecified)}% of WCO records have no recorded data source.`;
-  return (
-    <div style={{ marginTop: 8, display: "inline-block", fontSize: 11.5, fontWeight: 600, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "4px 10px" }}>
-      {text}
-    </div>
-  );
-}
-
 function zColor(z: number) {
   if (z >= 2.576) return "#c53030";
   if (z >= 1.96)  return "#e53e3e";
@@ -93,7 +86,7 @@ export default function DashboardPage() {
     <ProtectedRoute>
       <div style={{ height: "100vh", display: "flex", flexDirection: "column", fontFamily: "system-ui,-apple-system,sans-serif" }}>
         <Navbar />
-        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", background: "#f3f4f6" }}>
+        <div className="wco-app-bg" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
           <DashboardContent />
         </div>
       </div>
@@ -110,6 +103,7 @@ function DashboardContent() {
   const [aggForecast, setAggForecast] = useState<AggregateForecastPoint[]>([]);
   const [loading,  setLoading]  = useState(true);
   const [error,    setError]    = useState<string | null>(null);
+  const [printing, setPrinting] = useState(false);
 
   useEffect(() => {
     // Fast calls — summary cards render as soon as these resolve
@@ -152,10 +146,35 @@ function DashboardContent() {
   );
 
   const top5 =[...hotspots].sort((a, b) => b.gi_star_z - a.gi_star_z).slice(0, 5);
+  const trend = completeWeeks(weekly.slice(-24), w => w.count);
+  const fcast = completeWeeks(aggForecast, p => p.establishment_count);
 
-  function exportPDF() {
-    const el = document.getElementById("dashboard-print-area");
-    if (!el) return;
+  async function exportPDF() {
+    const src = document.getElementById("dashboard-print-area");
+    if (!src || printing) return;
+    // Re-render the charts at the A4 printable width (6.27in = 602 CSS px) before
+    // copying them, so the PDF looks the same whether exported from a phone or a
+    // wide desktop screen. The "Preparing PDF…" overlay hides the brief re-layout.
+    setPrinting(true);
+    src.classList.add("wco-dash-printing");
+    await new Promise(r => setTimeout(r, 700));
+    const el = src.cloneNode(true) as HTMLElement;
+    src.classList.remove("wco-dash-printing");
+    setPrinting(false);
+    el.classList.remove("wco-dash-printing");
+    el.querySelectorAll("svg.recharts-surface").forEach(svg => {
+      const w = svg.getAttribute("width"), h = svg.getAttribute("height");
+      if (w && h && !svg.getAttribute("viewBox")) {
+        svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+        svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+      }
+    });
+    const generated = new Date().toLocaleString("en-PH", { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    const header = `<header class="report-head">
+      <div><h1>WCO Atlas — System Overview</h1>
+      <p>Batangas City · Waste cooking oil generation, hotspots and forecasts</p></div>
+      <div class="meta">Generated ${generated}${trainStatus?.model_version ? `<br>Model ${trainStatus.model_version}` : ""}</div>
+    </header>`;
 
     // Hidden iframe approach: serialises the rendered SVGs into a fresh document
     // (no ID conflicts from duplicate recharts clip/gradient IDs) without opening
@@ -171,6 +190,16 @@ function DashboardContent() {
   * { box-sizing: border-box; }
   body { margin: 16px 20px; font-family: system-ui, sans-serif; background: white; }
   svg { overflow: visible !important; }
+  .report-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px;
+    padding-bottom: 10px; margin-bottom: 14px; border-bottom: 2px solid #0f6e56; }
+  .report-head h1 { font-size: 18px; margin: 0 0 2px; color: #0b3d30; }
+  .report-head p { font-size: 11px; margin: 0; color: #4b6b61; }
+  .report-head .meta { font-size: 10px; color: #6b8a80; text-align: right; }
+  .recharts-wrapper { width: 100% !important; height: auto !important; }
+  svg.recharts-surface { width: 100% !important; height: auto !important; }
+  /* Glass cards print as crisp white cards */
+  * { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
+  [style*="backdrop-filter"] { background: #fff !important; box-shadow: none !important; border: 1px solid #dfe7e3 !important; }
   .recharts-wrapper, .recharts-surface { overflow: visible !important; }
   @media print {
     @page { margin: 1in; size: A4 portrait; }
@@ -186,9 +215,11 @@ function DashboardContent() {
     svg { max-width: 100% !important; height: auto !important; }
     /* Avoid splitting a card across two pages */
     .pdf-g5 > div, .pdf-g3 > div, .pdf-g2 > div { break-inside: avoid; page-break-inside: avoid; }
+    /* Never split a card across pages */
+    [style*="backdrop-filter"] { break-inside: avoid; page-break-inside: avoid; }
   }
 </style>
-</head><body>${el.outerHTML}</body></html>`);
+</head><body>${header}${el.outerHTML}</body></html>`);
     doc.close();
 
     setTimeout(() => {
@@ -199,8 +230,8 @@ function DashboardContent() {
   }
 
   return (
-    <div style={{ maxWidth: 1100, margin: "0 auto", padding: 28 }}>
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 24 }}>
+    <div className="wco-page-pad" style={{ maxWidth: 1100, margin: "0 auto", padding: 28 }}>
+      <div className="wco-page-head" style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 24, gap: 16 }}>
         <div>
           <h1 style={{ fontSize: 26, fontWeight: 900, color: "#111827", margin: "0 0 4px", letterSpacing: "-0.02em" }}>
             WCO System Overview
@@ -208,15 +239,19 @@ function DashboardContent() {
           <p style={{ fontSize: 13, color: "#6b7280", margin: 0 }}>
             Batangas City · Live summary from GIS hotspot analysis &amp; LSTM forecasting
           </p>
-          <DataSourceNotice counts={wcoSummary?.data_source_counts} />
         </div>
         <button
           onClick={exportPDF}
-          style={{ fontSize: 12, padding: "7px 16px", borderRadius: 9, border: "1px solid #e2e8f0", background: "white", cursor: "pointer", color: "#374151", fontWeight: 600, fontFamily: "inherit", flexShrink: 0 }}
+          style={{ fontSize: 12, padding: "8px 16px", borderRadius: 10, border: "1px solid rgba(15,110,86,0.18)", background: "rgba(255,255,255,0.7)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", cursor: "pointer", color: "#1f3d35", fontWeight: 700, fontFamily: "inherit", flexShrink: 0 }}
         >
           Export PDF
         </button>
       </div>
+      {printing && (
+        <div className="wco-noprint" role="status" style={{ position: "fixed", inset: 0, zIndex: 3000, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(228,243,236,0.92)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)", fontSize: 14, fontWeight: 700, color: "#0f6e56" }}>
+          Preparing PDF…
+        </div>
+      )}
       <div id="dashboard-print-area">
 
       {/* ── Row 1: GIS overview (5 cards, fixed columns) ─────────────────── */}
@@ -229,7 +264,7 @@ function DashboardContent() {
             { label: "Significant hotspots", value: (summary.hotspot_counts.high ?? 0) + (summary.hotspot_counts.medium ?? 0),      unit: "",      color: "#dc2626" },
             { label: "Hotspot coverage",     value: `${summary.hotspot_counts.high ?? 0}H / ${summary.hotspot_counts.medium ?? 0}M`,     unit: "",      color: "#7c3aed" },
           ].map(({ label, value, unit, color }) => (
-            <div key={label} style={{ background: "white", borderRadius: 14, padding: "14px 16px", boxShadow: "0 1px 3px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.06)" }}>
+            <div key={label} style={{ ...glass, borderRadius: 18, padding: "14px 16px" }}>
               <div style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 5 }}>{label}</div>
               <div style={{ fontSize: 24, fontWeight: 900, color, fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>
                 {value}<span style={{ fontSize: 12, fontWeight: 500, color: "#94a3b8", marginLeft: 3 }}>{unit}</span>
@@ -242,7 +277,7 @@ function DashboardContent() {
       {/* ── Row 2: WCO period summary + LSTM model metrics ───────────────── */}
       <div className="pdf-g2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
         {/* Period summary */}
-        <div style={{ background: "white", borderRadius: 14, padding: "16px 20px", boxShadow: "0 1px 3px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.06)" }}>
+        <div style={{ ...glass, borderRadius: 18, padding: "16px 20px" }}>
           <div style={{ fontSize: 10, fontWeight: 800, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 12 }}>WCO Period Summary</div>
           <div className="pdf-g3" style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10 }}>
             {wcoSummary ? [
@@ -250,7 +285,7 @@ function DashboardContent() {
               { label: `YTD ${wcoSummary.current_year}`, value: wcoSummary.ytd_total_liters.toLocaleString(), unit: "L", color: "#7c3aed" },
               { label: "Last Entry", value: wcoSummary.last_updated ? new Date(wcoSummary.last_updated).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" }) : "—", unit: "", color: "#374151" },
             ].map(({ label, value, unit, color }) => (
-              <div key={label} style={{ background: "#f8fafc", borderRadius: 10, padding: "10px 12px", border: "1px solid #f1f5f9" }}>
+              <div key={label} style={{ ...glassTile, borderRadius: 12, padding: "10px 12px" }}>
                 <div style={{ fontSize: 9, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>{label}</div>
                 <div style={{ fontSize: 18, fontWeight: 900, color, fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>
                   {value}<span style={{ fontSize: 10, fontWeight: 500, color: "#94a3b8", marginLeft: 2 }}>{unit}</span>
@@ -263,10 +298,10 @@ function DashboardContent() {
         </div>
 
         {/* Model performance */}
-        <div style={{ background: "white", borderRadius: 14, padding: "16px 20px", boxShadow: "0 1px 3px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.06)" }}>
+        <div style={{ ...glass, borderRadius: 18, padding: "16px 20px" }}>
           <div style={{ fontSize: 10, fontWeight: 800, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 12 }}>
             LSTM Model Performance
-            {trainStatus?.model_version && <span style={{ marginLeft: 6, fontWeight: 500, color: "#cbd5e1" }}>{trainStatus.model_version}</span>}
+            {trainStatus?.model_version && <span style={{ marginLeft: 6, fontWeight: 500, color: "#a3b3c2", display: "inline-block", whiteSpace: "nowrap" }}>{trainStatus.model_version}</span>}
           </div>
           {trainStatus?.metrics && (
             <div style={{ fontSize: 10, color: "#94a3b8", marginTop: -8, marginBottom: 10 }}>
@@ -281,7 +316,7 @@ function DashboardContent() {
                 { label: "R²",   value: trainStatus.metrics.r2 != null ? trainStatus.metrics.r2.toFixed(3) : "—", unit: "", sub: "Goodness of Fit",
                   color: trainStatus.metrics.r2 >= 0.8 ? "#16a34a" : trainStatus.metrics.r2 >= 0.6 ? "#d97706" : "#dc2626" },
               ].map(({ label, value, unit, sub, color }) => (
-                <div key={label} style={{ background: "#f8fafc", borderRadius: 10, padding: "10px 12px", border: "1px solid #f1f5f9" }}>
+                <div key={label} style={{ ...glassTile, borderRadius: 12, padding: "10px 12px" }}>
                   <div style={{ fontSize: 9, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>{label}</div>
                   <div style={{ fontSize: 18, fontWeight: 900, color, fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>
                     {value}<span style={{ fontSize: 10, fontWeight: 500, color: "#94a3b8", marginLeft: 2 }}>{unit}</span>
@@ -304,10 +339,10 @@ function DashboardContent() {
 
       {/* Weekly WCO trend */}
       {weekly.length > 1 && (
-        <div style={{ background: "white", borderRadius: 16, padding: 20, marginBottom: 16, boxShadow: "0 1px 3px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.06)" }}>
+        <div style={{ ...glass, borderRadius: 20, padding: 20, marginBottom: 16 }}>
           <div style={{ fontSize: 12, fontWeight: 800, color: "#1a202c", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 16 }}>Weekly WCO Collection Trend</div>
           <ResponsiveContainer width="100%" height={200}>
-            <AreaChart data={weekly.slice(-24)} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+            <AreaChart data={trend.rows} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
               <defs>
                 <linearGradient id="wcoGrad" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#0f6e56" stopOpacity={0.25} />
@@ -349,21 +384,27 @@ function DashboardContent() {
                 fill="url(#wcoGrad)"
                 dot={false}
                 activeDot={{ r: 4, fill: "#0f6e56" }}
+                isAnimationActive={!printing}
               />
             </AreaChart>
           </ResponsiveContainer>
+          {trend.dropped > 0 && (
+            <div style={{ marginTop: 6, fontSize: 10.5, color: "#7b958c" }}>
+              {trend.dropped} partial week{trend.dropped !== 1 ? "s" : ""} hidden (fewer than half of establishments reporting).
+            </div>
+          )}
         </div>
       )}
 
       {/* Aggregate forecasted WCO supply */}
       {aggForecast.length > 0 && (
-        <div style={{ background: "white", borderRadius: 16, padding: 20, marginBottom: 16, boxShadow: "0 1px 3px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.06)" }}>
+        <div style={{ ...glass, borderRadius: 20, padding: 20, marginBottom: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
             <div style={{ fontSize: 12, fontWeight: 800, color: "#1a202c", textTransform: "uppercase", letterSpacing: "0.06em" }}>3-Month Aggregate WCO Forecast</div>
             <span style={{ fontSize: 11, color: "#94a3b8" }}>{aggForecast[0]?.establishment_count ?? 0} establishments</span>
           </div>
           <ResponsiveContainer width="100%" height={180}>
-            <AreaChart data={aggForecast} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+            <AreaChart data={fcast.rows} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
               <defs>
                 <linearGradient id="aggGrad" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#7c3aed" stopOpacity={0.2} />
@@ -381,9 +422,15 @@ function DashboardContent() {
                 contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8f0" }}
               />
               <Area type="monotone" dataKey="total_predicted_liters" stroke="#7c3aed" strokeWidth={2}
-                strokeDasharray="6 3" fill="url(#aggGrad)" dot={false} activeDot={{ r: 4 }} />
+                strokeDasharray="6 3" fill="url(#aggGrad)" dot={false} activeDot={{ r: 4 }}
+                isAnimationActive={!printing} />
             </AreaChart>
           </ResponsiveContainer>
+          {fcast.dropped > 0 && (
+            <div style={{ marginTop: 6, fontSize: 10.5, color: "#7b958c" }}>
+              {fcast.dropped} partial week{fcast.dropped !== 1 ? "s" : ""} hidden (fewer than half of establishments reporting).
+            </div>
+          )}
           {trainStatus?.model_version && (
             <div style={{ marginTop: 8, fontSize: 10, color: "#94a3b8" }}>
               Model: {trainStatus.model_version}
@@ -395,7 +442,7 @@ function DashboardContent() {
 
       <div className="pdf-g2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         {/* Top 5 hotspots */}
-        <div style={{ background: "white", borderRadius: 16, padding: 20, boxShadow: "0 1px 3px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.06)" }}>
+        <div style={{ ...glass, borderRadius: 20, padding: 20 }}>
           <div style={{ fontSize: 12, fontWeight: 800, color: "#1a202c", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 16 }}>Top 5 Hotspots</div>
           {top5.length === 0
             ? <div style={{ color: "#94a3b8", fontSize: 13 }}>No hotspot data yet.</div>
@@ -420,7 +467,7 @@ function DashboardContent() {
         {/* WCO by type + RSM optimal */}
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           {summary && (
-            <div style={{ background: "white", borderRadius: 16, padding: 20, boxShadow: "0 1px 3px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.05)", border: "1px solid rgba(0,0,0,0.06)" }}>
+            <div style={{ ...glass, borderRadius: 20, padding: 20 }}>
               <div style={{ fontSize: 12, fontWeight: 800, color: "#1a202c", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 14 }}>WCO by Type</div>
               {summary.by_type.map(t => (
                 <div key={t.type} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: "1px solid #f1f5f9" }}>

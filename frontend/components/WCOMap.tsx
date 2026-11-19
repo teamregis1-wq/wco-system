@@ -9,6 +9,7 @@
  *   - Right panel: legend, city summary, top-10 hotspot list, forecast chart
  */
 
+import type { LatLng } from "leaflet";
 import { useEffect, useState, useRef, useMemo } from "react";
 import {
   MapContainer, TileLayer, CircleMarker, ImageOverlay, Tooltip, useMap, useMapEvents,
@@ -195,6 +196,32 @@ async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> 
 
 // ── Map helpers ───────────────────────────────────────────────────────────────
 
+/** For PDF export: on "wco:print-prepare" re-measure the (temporarily print-sized)
+ *  map and fit every establishment; on "wco:print-done" restore the previous view. */
+function PrintFit({ hotspots }: { hotspots: GiHotspot[] }) {
+  const map = useMap();
+  useEffect(() => {
+    let saved: { c: LatLng; z: number } | null = null;
+    const prepare = () => {
+      saved = { c: map.getCenter(), z: map.getZoom() };
+      map.invalidateSize({ animate: false });
+      if (hotspots.length) {
+        const lats = hotspots.map(h => h.latitude), lngs = hotspots.map(h => h.longitude);
+        map.fitBounds([[Math.min(...lats) - 0.002, Math.min(...lngs) - 0.002],
+                       [Math.max(...lats) + 0.002, Math.max(...lngs) + 0.002]], { padding: [24, 24], animate: false });
+      }
+    };
+    const done = () => {
+      map.invalidateSize({ animate: false });
+      if (saved) map.setView(saved.c, saved.z, { animate: false });
+    };
+    window.addEventListener("wco:print-prepare", prepare);
+    window.addEventListener("wco:print-done", done);
+    return () => { window.removeEventListener("wco:print-prepare", prepare); window.removeEventListener("wco:print-done", done); };
+  }, [map, hotspots]);
+  return null;
+}
+
 function FitBounds({ hotspots }: { hotspots: GiHotspot[] }) {
   const map = useMap();
   useEffect(() => {
@@ -354,36 +381,53 @@ export default function WCOMap() {
   const kdeOverlayBounds: [[number, number], [number, number]] | null =
     kde ? [[kde.lat_min, kde.lng_min], [kde.lat_max, kde.lng_max]] : null;
 
-  function exportMapPDF() {
+  async function exportMapPDF() {
+    // The map is briefly resized to the exact printable A4 area (6.27 × 7.7 in at 1 in
+    // margins) and refitted, so tiles load for the whole page on phones and desktops alike.
     const style = document.createElement("style");
     style.id = "__map-print-style";
     style.textContent = `
+      #__map-print-root.wco-map-printing {
+        position: fixed !important; top: 0 !important; left: 0 !important;
+        width: 6.27in !important; height: 7.7in !important; z-index: 99999 !important;
+        background: #fff !important; flex: none !important;
+      }
       @media print {
         @page { margin: 1in; size: A4 portrait; }
         body * { visibility: hidden !important; }
         #__map-print-root,
         #__map-print-root * { visibility: visible !important; }
         .map-noprint, .map-noprint * { display: none !important; visibility: hidden !important; }
+        .leaflet-control-zoom { display: none !important; }
+        .wco-print-only { display: block !important; }
         #__map-print-root * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
         #__map-print-root {
           position: fixed !important;
           top: 0 !important;
           left: 0 !important;
-          width: 100% !important;
+          width: 6.27in !important;
           height: 7.7in !important;
           z-index: 99999 !important;
         }
       }
     `;
     document.head.appendChild(style);
+    const root = document.getElementById("__map-print-root");
+    root?.classList.add("wco-map-printing");
+    window.dispatchEvent(new Event("wco:print-prepare"));
+    await new Promise(r => setTimeout(r, 1500));   // let tiles for the new extent load
     window.print();
-    setTimeout(() => document.getElementById("__map-print-style")?.remove(), 1500);
+    setTimeout(() => {
+      root?.classList.remove("wco-map-printing");
+      window.dispatchEvent(new Event("wco:print-done"));
+      document.getElementById("__map-print-style")?.remove();
+    }, 1500);
   }
 
   return (
-    <div style={{ display: "flex", height: "100%", minHeight: 0 }}>
+    <div className="wco-map-layout" style={{ display: "flex", height: "100%", minHeight: 0 }}>
       {/* ── Map ──────────────────────────────────────────────────────────── */}
-      <div id="__map-print-root" style={{ flex: 1, position: "relative", minWidth: 0 }}>
+      <div id="__map-print-root" className="wco-map-canvas" style={{ flex: 1, position: "relative", minWidth: 0 }}>
         {loading && (
           <div style={{
             position: "absolute", inset: 0, zIndex: 9999,
@@ -496,12 +540,24 @@ export default function WCOMap() {
           })}
 
           <FitBounds hotspots={hotspots} />
+          <PrintFit hotspots={hotspots} />
           <FlyToEstab id={selectedId} markers={markers} />
           <ResetViewControl hotspots={hotspots} tick={resetTick} />
         </MapContainer>
 
+        {/* Title caption that only appears in the exported PDF */}
+        <div className="wco-print-only" style={{
+          display: "none", position: "absolute", top: 10, left: 10, zIndex: 1000,
+          background: "rgba(255,255,255,0.92)", borderRadius: 8, padding: "6px 10px",
+          fontSize: 11, color: "#1f3d35", boxShadow: "0 1px 4px rgba(0,0,0,0.15)",
+        }}>
+          <b>WCO Atlas — Gi* hotspot map, Batangas City</b><br />
+          {new Date().toLocaleDateString("en-PH", { year: "numeric", month: "long", day: "numeric" })}
+          {" · "}{hotspots.length} establishments · colours = Gi* z-score
+        </div>
+
         {/* Bottom-left button row — flex so buttons never overlap */}
-        <div className="map-noprint" style={{
+        <div className="map-noprint wco-map-buttons" style={{
           position: "absolute", bottom: 24, left: 14, zIndex: 500,
           display: "flex", gap: 8, flexWrap: "wrap",
         }}>
@@ -528,14 +584,15 @@ export default function WCOMap() {
 
         {/* Export PDF button */}
         <button
-          className="map-noprint"
+          className="map-noprint wco-map-export"
           onClick={exportMapPDF}
           style={{
             position: "absolute", bottom: 24, right: 14, zIndex: 500,
-            padding: "7px 14px", borderRadius: 10, border: "1px solid #ccc",
-            background: "white", color: "#333",
+            padding: "7px 14px", borderRadius: 11, border: "1px solid rgba(255,255,255,0.8)",
+            background: "rgba(255,255,255,0.78)", color: "#1f3d35",
+            backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)",
             fontSize: 12, fontWeight: 700, cursor: "pointer",
-            boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+            boxShadow: "0 4px 14px rgba(15,110,86,0.18)",
           }}
         >
           Export PDF
@@ -543,6 +600,7 @@ export default function WCOMap() {
 
         {/* Sidebar toggle — lives in map div so it's always visible */}
         <button
+          className="map-noprint wco-map-toggle"
           onClick={() => setSidebarOpen(o => !o)}
           title={sidebarOpen ? "Collapse panel" : "Expand panel"}
           style={{
@@ -561,10 +619,12 @@ export default function WCOMap() {
       </div>
 
       {/* ── Right panel ──────────────────────────────────────────────────── */}
-      <aside style={{
+      <aside className="wco-map-panel" style={{
         width: sidebarOpen ? 340 : 0,
         minWidth: sidebarOpen ? 340 : 0,
-        background: "#f8fafc", borderLeft: sidebarOpen ? "1px solid #e2e8f0" : "none",
+        background: "rgba(255,255,255,0.58)",
+        backdropFilter: "blur(18px) saturate(160%)", WebkitBackdropFilter: "blur(18px) saturate(160%)",
+        borderLeft: sidebarOpen ? "1px solid rgba(15,110,86,0.10)" : "none",
         overflowY: sidebarOpen ? "auto" : "hidden",
         overflowX: "hidden",
         display: "flex", flexDirection: "column", gap: 0,
@@ -752,9 +812,10 @@ function MapClickHandler({ markers, onSelect }: { markers: MarkerData[]; onSelec
 function StatBox({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
     <div style={{
-      background: accent ? "#f0fdf4" : "white",
-      border: `1px solid ${accent ? "#bbf7d0" : "#e2e8f0"}`,
-      borderRadius: 10, padding: "10px 12px",
+      background: accent ? "rgba(220,252,231,0.7)" : "rgba(255,255,255,0.7)",
+      border: `1px solid ${accent ? "rgba(134,239,172,0.8)" : "rgba(255,255,255,0.9)"}`,
+      boxShadow: "inset 0 1px 0 rgba(255,255,255,0.6)",
+      borderRadius: 12, padding: "10px 12px",
     }}>
       <div style={{ fontSize: 11, color: "#718096", marginBottom: 3 }}>{label}</div>
       <div style={{ fontSize: 18, fontWeight: 800, color: accent ? "#0f6e56" : "#1a202c", fontVariantNumeric: "tabular-nums" }}>{value}</div>
@@ -765,8 +826,9 @@ function StatBox({ label, value, accent }: { label: string; value: string; accen
 // ── Panel styles ──────────────────────────────────────────────────────────────
 
 const mapBtn: React.CSSProperties = {
-  padding: "7px 14px", borderRadius: 10, border: "1px solid #ccc",
-  background: "white", color: "#333",
+  padding: "7px 14px", borderRadius: 11, border: "1px solid rgba(255,255,255,0.8)",
+  background: "rgba(255,255,255,0.78)", color: "#1f3d35",
+  backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)",
   fontSize: 12, fontWeight: 700, cursor: "pointer",
   boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
   whiteSpace: "nowrap",
@@ -775,7 +837,7 @@ const mapBtn: React.CSSProperties = {
 const P: Record<string, React.CSSProperties> = {
   section: {
     padding: "16px",
-    borderBottom: "1px solid #e2e8f0",
+    borderBottom: "1px solid rgba(15,110,86,0.08)",
   },
   heading: {
     fontSize: 12,
