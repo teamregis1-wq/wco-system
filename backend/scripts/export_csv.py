@@ -1,18 +1,19 @@
 """Export WCO records to CSV (for archiving or the Colab notebook).
 
     cd backend
-    ./venv/bin/python -m scripts.export_csv [--out PATH]   # default: data/wco_export_<YYYYMMDD>.csv
+    ./venv/bin/python -m scripts.export_csv [--out PATH]   # default: data/exports/wco_export_<YYYYMMDD>.csv
 
 Columns: establishment_id, wco_code, week_date, quantity_liters, data_source.
 
 establishment_id is the row id in THIS database only — ids differ between
-databases (the archived data/wco_export.csv uses ids 551–670). Use wco_code
+databases (the archived data/archive/wco_export.csv uses ids 551–670). Use wco_code
 to match establishments across databases; never assume ids line up.
 """
 import argparse
 import csv
 from collections import Counter
 from datetime import date
+from pathlib import Path
 
 from sqlalchemy import select
 
@@ -22,8 +23,8 @@ from app.models import Establishment, WCOGenerationRecord
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    # Dated default so the archived data/wco_export.csv is never overwritten by accident.
-    ap.add_argument("--out", default=f"data/wco_export_{date.today():%Y%m%d}.csv")
+    # Dated default so the archived data/archive/wco_export.csv is never overwritten by accident.
+    ap.add_argument("--out", default=f"data/exports/wco_export_{date.today():%Y%m%d}.csv")
     args = ap.parse_args(argv)
     db = SessionLocal()
     try:
@@ -35,6 +36,7 @@ def main(argv=None):
             .order_by(WCOGenerationRecord.establishment_id, WCOGenerationRecord.week_date)
         ).all()
         header = ["establishment_id", "wco_code", "week_date", "quantity_liters", "data_source"]
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
         with open(args.out, "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             w.writerow(header)

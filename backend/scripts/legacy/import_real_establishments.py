@@ -20,7 +20,7 @@ variance and learns meaningful patterns.
   fast_food:         base 40–80 L/week  (vs v2's narrow 44–66)
   food_manufacturer: base 70–120 L/week (vs v2's narrow 72–108)
 
-Run from backend/:  python -m scripts.import_real_establishments
+Run from backend/:  python -m scripts.legacy.import_real_establishments
 """
 import math
 import random

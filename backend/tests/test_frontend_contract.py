@@ -25,7 +25,7 @@ METHOD = re.compile(r"""method:\s*["'](?P<m>[A-Z]+)["']""")
 
 def _frontend_calls():
     calls = set()
-    for f in list(FRONTEND.glob("app/**/*.tsx")) + list(FRONTEND.glob("components/*.tsx")) \
+    for f in list(FRONTEND.glob("app/**/*.tsx")) + list(FRONTEND.glob("components/**/*.tsx")) \
             + list(FRONTEND.glob("lib/*.ts*")):
         src = f.read_text(encoding="utf-8")
         # Normalise template-literal fetch(`${API_BASE}/x`) to the same quoting as apiFetch.

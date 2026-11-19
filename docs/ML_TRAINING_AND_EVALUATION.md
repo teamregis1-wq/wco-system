@@ -82,7 +82,7 @@ A model is only useful if it beats these.
 
 ## 5. Results (measured 2026-11-19, seed 42, default configuration)
 
-**A. Archived dataset** `backend/data/wco_export.csv` (120 synthetic series × 52 weeks, 2025-05-28 → 2026-05-20).
+**A. Archived dataset** `backend/data/archive/wco_export.csv` (120 synthetic series × 52 weeks, 2025-05-28 → 2026-05-20).
 Windows: train 2,160 / validation 720 / test 1,920; stopped at epoch 28 (best 20); ~12 s on a laptop CPU.
 
 | One-step, held-out test weeks | MAE (L) | RMSE (L) | R² | MAPE |
@@ -164,7 +164,7 @@ seasonal naive 3.73 L and naive 9.87 L.
 - `inprocess` (local development / one long-running server): the API process also executes jobs on an in-process timer.
 
 Both modes use the same queue, claim, locks, retries and activation code. See
-[DEPLOYMENT_VERCEL.md §5](DEPLOYMENT_VERCEL.md#5-the-retraining-worker) for hosting the worker.
+[DEPLOYMENT.md](DEPLOYMENT.md) (on Railway the API trains in-process; §6 covers an optional separate worker).
 
 ```
 WCO create / bulk import / edit / delete, establishment (de)activation
@@ -242,7 +242,7 @@ analysis (§9).
 known landmarks (SM City Batangas, the national highway, BatStateU Alangilan, the city hall, the port).
 Many are evenly spaced offsets from those anchors. They are **approximate and not field-surveyed**, and
 the listed business names were not verified to be at those points. The separate
-`data/batangas_city_restaurants_seed.csv` (32 rows) is a manually compiled list from food-delivery and
+`data/legacy/batangas_city_restaurants_seed.csv` (32 rows) is a manually compiled list from food-delivery and
 mall directories; it is not used by the app.
 
 **Presentation rules implemented:**

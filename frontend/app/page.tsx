@@ -3,11 +3,11 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
-import { LogoMark, LogoWordmark } from "@/components/Logo";
+import { LogoMark, LogoWordmark } from "@/components/layout/Logo";
 import { brandFont } from "@/lib/fonts";
-import AuthPopover from "@/components/AuthPopover";
-import LandingBackground from "@/components/LandingBackground";
-import MiniMapCard from "@/components/MiniMapCard";
+import AuthPopover from "@/components/auth/AuthPopover";
+import LandingBackground from "@/components/landing/LandingBackground";
+import MiniMapCard from "@/components/landing/MiniMapCard";
 
 const FEATURES = [
   {

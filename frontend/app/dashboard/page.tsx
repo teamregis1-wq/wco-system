@@ -5,8 +5,8 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   LineChart, Line, BarChart, Bar,
 } from "recharts";
-import ProtectedRoute from "@/components/ProtectedRoute";
-import Navbar from "@/components/Navbar";
+import ProtectedRoute from "@/components/auth/ProtectedRoute";
+import Navbar from "@/components/layout/Navbar";
 import { API_BASE, getToken } from "@/lib/api";
 import { glass, glassTile } from "@/lib/theme";
 

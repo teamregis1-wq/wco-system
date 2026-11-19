@@ -1,6 +1,6 @@
 """Seed the database with realistic synthetic data.
 
-Run AFTER migrations:  python -m scripts.seed
+Run AFTER migrations:  python -m scripts.legacy.seed
 
 Generates:
   - admin/researcher accounts only if SEED_ADMIN_PASSWORD / SEED_RESEARCHER_PASSWORD are set

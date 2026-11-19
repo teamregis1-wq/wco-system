@@ -2,16 +2,16 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
-import ProtectedRoute from "@/components/ProtectedRoute";
-import { RoleGuard } from "@/components/ProtectedRoute";
-import Navbar from "@/components/Navbar";
-import PageShell, { card, primaryBtn, ghostBtn, input, label } from "@/components/PageShell";
+import ProtectedRoute from "@/components/auth/ProtectedRoute";
+import { RoleGuard } from "@/components/auth/ProtectedRoute";
+import Navbar from "@/components/layout/Navbar";
+import PageShell, { card, primaryBtn, ghostBtn, input, label } from "@/components/layout/PageShell";
 import { API_BASE, getToken } from "@/lib/api";
-import ForecastChart from "@/components/ForecastChart";
+import ForecastChart from "@/components/forecast/ForecastChart";
 import type { ForecastPoint } from "@/lib/api";
-import { toast, Toaster } from "@/components/Toast";
+import { toast, Toaster } from "@/components/layout/Toast";
 import { popup } from "@/lib/theme";
-import RetrainStatusBadge from "@/components/RetrainStatusBadge";
+import RetrainStatusBadge from "@/components/forecast/RetrainStatusBadge";
 import {
   parseCSV, validateEstablishments, validateWcoRecords,
   downloadCSV, downloadEstablishmentTemplate, downloadWcoTemplate,
@@ -48,7 +48,7 @@ import {
   ResponsiveContainer, ReferenceLine,
 } from "recharts";
 
-const LocationPicker = dynamic(() => import("@/components/LocationPicker"), { ssr: false });
+const LocationPicker = dynamic(() => import("@/components/maps/LocationPicker"), { ssr: false });
 
 // CSV parsing, validation, and export all live in lib/csv.ts so the two
 // importers below share one RFC 4180 parser and one set of validation rules.

@@ -1,10 +1,10 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import ProtectedRoute from "@/components/ProtectedRoute";
-import Navbar from "@/components/Navbar";
+import ProtectedRoute from "@/components/auth/ProtectedRoute";
+import Navbar from "@/components/layout/Navbar";
 
-const WCOMap = dynamic(() => import("@/components/WCOMap"), {
+const WCOMap = dynamic(() => import("@/components/maps/WCOMap"), {
   ssr: false,
   loading: () => (
     <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#718096", fontSize: 14 }}>

@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import ProtectedRoute from "@/components/ProtectedRoute";
-import Navbar from "@/components/Navbar";
-import PageShell, { card as cardStyle, primaryBtn as primaryBtnStyle, ghostBtn as ghostBtnStyle, input as inputStyle, label as labelStyle } from "@/components/PageShell";
+import ProtectedRoute from "@/components/auth/ProtectedRoute";
+import Navbar from "@/components/layout/Navbar";
+import PageShell, { card as cardStyle, primaryBtn as primaryBtnStyle, ghostBtn as ghostBtnStyle, input as inputStyle, label as labelStyle } from "@/components/layout/PageShell";
 import { API_BASE, getToken } from "@/lib/api";
 import { useAuth, type Role } from "@/lib/auth-context";
-import { toast, Toaster } from "@/components/Toast";
+import { toast, Toaster } from "@/components/layout/Toast";
 import { downloadCSV } from "@/lib/csv";
 import { glass, popup } from "@/lib/theme";
 

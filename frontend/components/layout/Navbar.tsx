@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth, type Role } from "@/lib/auth-context";
-import { LogoMark } from "@/components/Logo";
+import { LogoMark } from "@/components/layout/Logo";
 import { brandFont } from "@/lib/fonts";
 import { greenGradient } from "@/lib/theme";
 

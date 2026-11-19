@@ -16,7 +16,7 @@ import {
 } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import { API_BASE, getToken } from "@/lib/api";
-import ForecastChart from "@/components/ForecastChart";
+import ForecastChart from "@/components/forecast/ForecastChart";
 import type { ForecastPoint } from "@/lib/api";
 
 // ── Types ─────────────────────────────────────────────────────────────────────

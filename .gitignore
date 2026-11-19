@@ -26,5 +26,8 @@ node_modules/
 # Vercel CLI local state
 .vercel/
 
+# Generated CSV exports (python -m scripts.export_csv)
+backend/data/exports/
+
 # Security audit notes are kept local (the repository is public).
 docs/SYSTEM_AUDIT.md

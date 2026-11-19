@@ -95,7 +95,7 @@ def test_export_includes_stable_code(db, tmp_path):
     assert lines[1].split(",")[1:] == ["FF009", str(END), "12.5", "synthetic"]
 
 
-@pytest.mark.parametrize("module", ["scripts.seed", "scripts.import_real_establishments"])
+@pytest.mark.parametrize("module", ["scripts.legacy.seed", "scripts.legacy.import_real_establishments"])
 def test_destructive_seeds_refuse_without_flag(module, monkeypatch, db):
     import importlib
     make_establishment(db, code="KEEP1")
@@ -108,7 +108,7 @@ def test_destructive_seeds_refuse_without_flag(module, monkeypatch, db):
 
 
 def test_destructive_seed_requires_typed_confirmation(monkeypatch, db):
-    import scripts.import_real_establishments as mod
+    import scripts.legacy.import_real_establishments as mod
     make_establishment(db, code="KEEP2")
     monkeypatch.setattr("sys.argv", ["x", "--i-understand-this-deletes-data"])
     monkeypatch.setattr("builtins.input", lambda prompt="": "wrong-host")

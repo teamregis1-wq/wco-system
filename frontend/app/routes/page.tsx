@@ -2,14 +2,14 @@
 
 import { useEffect, useState, useCallback } from "react";
 import dynamic from "next/dynamic";
-import ProtectedRoute from "@/components/ProtectedRoute";
-import Navbar from "@/components/Navbar";
+import ProtectedRoute from "@/components/auth/ProtectedRoute";
+import Navbar from "@/components/layout/Navbar";
 import { API_BASE, getToken } from "@/lib/api";
 import { glass, greenGradient } from "@/lib/theme";
 import { useAuth } from "@/lib/auth-context";
 
-const LocationPicker = dynamic(() => import("@/components/LocationPicker"), { ssr: false });
-const RouteMap = dynamic(() => import("@/components/RouteMapView"), { ssr: false });
+const LocationPicker = dynamic(() => import("@/components/maps/LocationPicker"), { ssr: false });
+const RouteMap = dynamic(() => import("@/components/maps/RouteMapView"), { ssr: false });
 
 const BASE = API_BASE;
 
