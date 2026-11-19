@@ -9,6 +9,8 @@ import { useAuth, type Role } from "@/lib/auth-context";
 import { toast, Toaster } from "@/components/layout/Toast";
 import { downloadCSV } from "@/lib/csv";
 import { glass, popup } from "@/lib/theme";
+import PasswordInput from "@/components/auth/PasswordInput";
+import ChangePasswordModal from "@/components/auth/ChangePasswordModal";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -299,7 +301,7 @@ function AddUserModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
           </div>
           <div>
             <label style={labelStyle}>Password</label>
-            <input style={inputStyle} type="password" value={password} onChange={e => setPassword(e.target.value)} required minLength={8} placeholder="Min. 8 characters" />
+            <PasswordInput style={inputStyle} value={password} onChange={e => setPassword(e.target.value)} required minLength={8} placeholder="Min. 8 characters" autoComplete="new-password" />
           </div>
           <div>
             <label style={labelStyle}>Role</label>
@@ -336,6 +338,102 @@ function AddUserModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
           )}
           <button type="submit" disabled={busy} style={{ ...primaryBtnStyle, marginTop: 4, opacity: busy ? 0.7 : 1 }}>
             {busy ? "Creating…" : "Create user"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/** A strong password without look-alike characters (0/O, 1/l/I), easy to read aloud or type. */
+function generatePassword(length = 14): string {
+  const alphabet = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+  const bytes = new Uint32Array(length);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, b => alphabet[b % alphabet.length]).join("");
+}
+
+function ResetPasswordModal({ user, onClose }: { user: UserRow; onClose: () => void }) {
+  const [password,  setPassword]  = useState("");
+  const [confirm,   setConfirm]   = useState("");
+  const [generated, setGenerated] = useState<string | null>(null);
+  const [busy,      setBusy]      = useState(false);
+  const [error,     setError]     = useState<string | null>(null);
+
+  function generate() {
+    const pw = generatePassword();
+    setPassword(pw); setConfirm(pw); setGenerated(pw); setError(null);
+  }
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    if (password.length < 8)  { setError("The password must be at least 8 characters."); return; }
+    if (password !== confirm) { setError("The passwords do not match."); return; }
+    setBusy(true);
+    try {
+      await apiFetch(`/auth/users/${user.id}/password`, {
+        method: "PATCH",
+        body: JSON.stringify({ new_password: password }),
+      });
+      toast(`Password reset for ${user.full_name}. Share it with them privately.`);
+      onClose();
+    } catch (err) {
+      setError(String(err).replace("Error: ", ""));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={S.modalOverlay} onClick={onClose}>
+      <div className="wco-modal" style={S.modal} onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <h2 style={{ fontSize: 18, fontWeight: 800, color: "#1a202c", margin: 0 }}>Reset password</h2>
+          <button onClick={onClose} style={S.iconBtn} aria-label="Close">✕</button>
+        </div>
+        <p style={{ fontSize: 12.5, color: "#5b7a71", margin: "0 0 16px", lineHeight: 1.5 }}>
+          Set a new password for <strong>{user.full_name}</strong> ({user.email}). They will be signed out
+          everywhere and can change it themselves after signing in.
+        </p>
+        <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+              <label style={labelStyle}>New password</label>
+              <button type="button" onClick={generate}
+                style={{ background: "none", border: "none", color: "#0f6e56", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: "inherit", padding: 0 }}>
+                Generate
+              </button>
+            </div>
+            <PasswordInput style={inputStyle} value={password} required minLength={8} autoComplete="new-password"
+              placeholder="Min. 8 characters"
+              onChange={e => { setPassword(e.target.value); setGenerated(null); }} />
+          </div>
+          <div>
+            <label style={labelStyle}>Confirm new password</label>
+            <PasswordInput style={inputStyle} value={confirm} required autoComplete="new-password"
+              onChange={e => { setConfirm(e.target.value); setGenerated(null); }} />
+          </div>
+          {generated && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", borderRadius: 10,
+                          background: "#f0fdf4", border: "1px solid #bbf7d0", fontSize: 12.5, color: "#166534" }}>
+              <span style={{ flex: 1, minWidth: 0 }}>
+                Generated: <code style={{ fontSize: 13.5, fontWeight: 800, letterSpacing: "0.04em", wordBreak: "break-all" }}>{generated}</code>
+              </span>
+              <button type="button"
+                onClick={() => navigator.clipboard?.writeText(generated).then(() => toast("Password copied."), () => {})}
+                style={{ ...ghostBtnStyle, fontSize: 11, padding: "4px 10px", flexShrink: 0 }}>
+                Copy
+              </button>
+            </div>
+          )}
+          {error && (
+            <div style={{ padding: "8px 12px", background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, fontSize: 13, color: "#dc2626" }}>
+              {error}
+            </div>
+          )}
+          <button type="submit" disabled={busy} style={{ ...primaryBtnStyle, marginTop: 4, opacity: busy ? 0.7 : 1 }}>
+            {busy ? "Saving…" : "Reset password"}
           </button>
         </form>
       </div>
@@ -625,6 +723,8 @@ function AdminDashboard() {
   const [showAdd, setShowAdd] = useState(false);
   const [roleLoading, setRoleLoading] = useState<number | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
+  const [resetFor, setResetFor] = useState<UserRow | null>(null);
+  const [changeOwn, setChangeOwn] = useState(false);
   const [roleFilter, setRoleFilter] = useState<Role | "all">("all");
   const [auditLogs, setAuditLogs] = useState<AuditEntry[]>([]);
   const [auditFilter, setAuditFilter] = useState("");
@@ -792,17 +892,24 @@ function AdminDashboard() {
                         {new Date(u.created_at).toLocaleDateString("en-PH", { year: "numeric", month: "short", day: "numeric" })}
                       </td>
                       <td style={S.td}>
-                        {!isSelf && (
-                          isDeleting ? (
-                            <div style={{ display: "flex", gap: 6 }}>
-                              <button onClick={() => deleteUser(u.id)} style={{ ...S.dangerBtn, fontSize: 11 }}>Confirm</button>
-                              <button onClick={() => setDeleteConfirm(null)} style={{ ...ghostBtnStyle, fontSize: 11 }}>Cancel</button>
-                            </div>
-                          ) : (
+                        {isSelf ? (
+                          <button onClick={() => setChangeOwn(true)} style={{ ...ghostBtnStyle, whiteSpace: "nowrap" }}>
+                            Change password
+                          </button>
+                        ) : isDeleting ? (
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <button onClick={() => deleteUser(u.id)} style={{ ...S.dangerBtn, fontSize: 11 }}>Confirm</button>
+                            <button onClick={() => setDeleteConfirm(null)} style={{ ...ghostBtnStyle, fontSize: 11 }}>Cancel</button>
+                          </div>
+                        ) : (
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <button onClick={() => setResetFor(u)} style={{ ...ghostBtnStyle, whiteSpace: "nowrap" }}>
+                              Reset password
+                            </button>
                             <button onClick={() => setDeleteConfirm(u.id)} style={ghostBtnStyle}>
                               Delete
                             </button>
-                          )
+                          </div>
                         )}
                       </td>
                     </tr>
@@ -905,6 +1012,12 @@ function AdminDashboard() {
 
       {showAdd && (
         <AddUserModal onClose={() => setShowAdd(false)} onCreated={load} />
+      )}
+      {resetFor && (
+        <ResetPasswordModal user={resetFor} onClose={() => setResetFor(null)} />
+      )}
+      {changeOwn && (
+        <ChangePasswordModal onClose={() => setChangeOwn(false)} />
       )}
 
       {detailsEntry && (

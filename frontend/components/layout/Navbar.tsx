@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth, type Role } from "@/lib/auth-context";
 import { LogoMark } from "@/components/layout/Logo";
 import { brandFont } from "@/lib/fonts";
 import { greenGradient } from "@/lib/theme";
+import ChangePasswordModal from "@/components/auth/ChangePasswordModal";
 
 const ROLE_BADGE: Record<Role, { bg: string; color: string; label: string }> = {
   admin:      { bg: "rgba(254,243,199,0.9)", color: "#92400e",  label: "Admin" },
@@ -26,6 +28,7 @@ export default function Navbar() {
   const { user, signOut, can } = useAuth();
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [pwOpen, setPwOpen] = useState(false);
   useEffect(() => { setMenuOpen(false); }, [pathname]);
   if (!user) return null;
 
@@ -64,6 +67,12 @@ export default function Navbar() {
           <span style={S.userName}>{user.full_name}</span>
           <span style={S.userEmail}>{user.email}</span>
         </div>
+        <button className="wco-nav-signout" onClick={() => setPwOpen(true)} style={S.iconBtn}
+          title="Change password" aria-label="Change password">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3b5f55" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <circle cx="7.5" cy="15.5" r="4.5" /><path d="M10.7 12.3L21 2" /><path d="M16 7l3 3" /><path d="M18.5 4.5l2 2" />
+          </svg>
+        </button>
         <button className="wco-nav-signout" onClick={signOut} style={S.signOutBtn}>Sign out</button>
         <button
           className="wco-nav-burger"
@@ -99,9 +108,15 @@ export default function Navbar() {
             <div style={S.userName}>{user.full_name}</div>
             <div style={{ ...S.userEmail, overflow: "hidden", textOverflow: "ellipsis" }}>{user.email}</div>
           </div>
-          <button onClick={signOut} style={S.signOutBtn}>Sign out</button>
+          <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+            <button onClick={() => { setMenuOpen(false); setPwOpen(true); }} style={S.signOutBtn}>Change password</button>
+            <button onClick={signOut} style={S.signOutBtn}>Sign out</button>
+          </div>
         </div>
       </div>
+
+      {/* Rendered at <body> level: the nav's backdrop-filter would otherwise trap a fixed overlay. */}
+      {pwOpen && createPortal(<ChangePasswordModal onClose={() => setPwOpen(false)} />, document.body)}
     </nav>
   );
 }
@@ -146,6 +161,11 @@ const S: Record<string, React.CSSProperties> = {
     border: "1px solid rgba(15,110,86,0.16)", borderRadius: 9,
     cursor: "pointer", padding: "6px 11px", flexShrink: 0,
   },
+  iconBtn: {
+    display: "inline-flex", alignItems: "center", justifyContent: "center",
+    width: 32, height: 30, background: "rgba(255,255,255,0.6)",
+    border: "1px solid rgba(15,110,86,0.16)", borderRadius: 9, cursor: "pointer", flexShrink: 0,
+  },
   burger: {
     alignItems: "center", justifyContent: "center", width: 40, height: 40,
     borderRadius: 11, border: "1px solid rgba(15,110,86,0.18)",
@@ -154,7 +174,7 @@ const S: Record<string, React.CSSProperties> = {
   sheet: {
     position: "absolute", top: 58, left: 0, right: 0,
     flexDirection: "column", gap: 6, padding: 12,
-    background: "rgba(240,250,245,0.92)",
+    background: "rgba(248,253,250,0.985)",
     backdropFilter: "blur(20px) saturate(170%)", WebkitBackdropFilter: "blur(20px) saturate(170%)",
     borderBottom: "1px solid rgba(15,110,86,0.12)",
     boxShadow: "0 18px 40px rgba(15,110,86,0.16)",

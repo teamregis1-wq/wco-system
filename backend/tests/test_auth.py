@@ -121,3 +121,83 @@ def test_settings_reject_weak_jwt_secret(secret):
 def test_admin_only_endpoints(client, researcher_headers):
     for path in ["/auth/users", "/auth/audit-logs", "/auth/system-stats"]:
         assert client.get(f"{API}{path}", headers=researcher_headers).status_code == 403
+
+
+# ── Passwords: self-service change and admin reset ──────────────────────────────
+
+def _register_and_login(client, email="pw@example.com", password="original-pass"):
+    client.post(f"{API}/auth/register", json={"email": email, "full_name": "Pw", "password": password})
+    r = client.post(f"{API}/auth/login", data={"username": email, "password": password})
+    assert r.status_code == 200
+    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+
+def _login_status(client, email, password):
+    return client.post(f"{API}/auth/login", data={"username": email, "password": password}).status_code
+
+
+def test_user_changes_own_password_and_old_sessions_end(client):
+    old_session = _register_and_login(client)
+    other_device = _register_and_login(client)
+
+    r = client.patch(f"{API}/auth/me/password", headers=old_session,
+                     json={"current_password": "wrong-pass", "new_password": "brand-new-pass"})
+    assert r.status_code == 400 and "incorrect" in r.json()["detail"]
+    r = client.patch(f"{API}/auth/me/password", headers=old_session,
+                     json={"current_password": "original-pass", "new_password": "original-pass"})
+    assert r.status_code == 400 and "different" in r.json()["detail"]
+    r = client.patch(f"{API}/auth/me/password", headers=old_session,
+                     json={"current_password": "original-pass", "new_password": "short"})
+    assert r.status_code == 422
+
+    r = client.patch(f"{API}/auth/me/password", headers=old_session,
+                     json={"current_password": "original-pass", "new_password": "brand-new-pass"})
+    assert r.status_code == 200
+    fresh = {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+    assert client.get(f"{API}/auth/me", headers=fresh).status_code == 200          # this device stays in
+    for stale in (old_session, other_device):                                      # every older token ends
+        r = client.get(f"{API}/auth/me", headers=stale)
+        assert r.status_code == 401 and "password was changed" in r.json()["detail"]
+    assert _login_status(client, "pw@example.com", "original-pass") == 401
+    assert _login_status(client, "pw@example.com", "brand-new-pass") == 200
+
+
+def test_admin_resets_another_users_password(client, admin_headers):
+    victim = _register_and_login(client, "forgot@example.com", "forgotten-pass")
+    users = client.get(f"{API}/auth/users", headers=admin_headers).json()
+    uid = next(u["id"] for u in users if u["email"] == "forgot@example.com")
+
+    r = client.patch(f"{API}/auth/users/{uid}/password", headers=admin_headers,
+                     json={"new_password": "reset-by-admin"})
+    assert r.status_code == 200
+    assert client.get(f"{API}/auth/me", headers=victim).status_code == 401
+    assert _login_status(client, "forgot@example.com", "reset-by-admin") == 200
+    assert _login_status(client, "forgot@example.com", "forgotten-pass") == 401
+
+    logs = client.get(f"{API}/auth/audit-logs", headers=admin_headers).json()
+    entry = next(l for l in logs if "password reset" in (l.get("details") or ""))
+    assert "reset-by-admin" not in str(entry)                                       # never logged
+
+    assert client.patch(f"{API}/auth/users/999999/password", headers=admin_headers,
+                        json={"new_password": "whatever-123"}).status_code == 404
+    assert client.patch(f"{API}/auth/users/{uid}/password", headers=admin_headers,
+                        json={"new_password": "short"}).status_code == 422
+
+
+def test_admin_reset_rules(client, admin_headers, researcher_headers, viewer_headers):
+    me = client.get(f"{API}/auth/me", headers=admin_headers).json()
+    r = client.patch(f"{API}/auth/users/{me['id']}/password", headers=admin_headers,
+                     json={"new_password": "new-admin-pass"})
+    assert r.status_code == 400 and "Change password" in r.json()["detail"]
+    for headers in (researcher_headers, viewer_headers):
+        assert client.patch(f"{API}/auth/users/{me['id']}/password", headers=headers,
+                            json={"new_password": "hijack-attempt"}).status_code == 403
+
+
+def test_token_without_password_fingerprint_is_rejected(client, admin_headers):
+    me = client.get(f"{API}/auth/me", headers=admin_headers).json()
+    legacy = jwt.encode({"sub": str(me["id"]), "role": "admin",
+                         "exp": datetime.now(timezone.utc) + timedelta(hours=1)},
+                        settings.jwt_secret, algorithm="HS256")
+    assert client.get(f"{API}/auth/me", headers={"Authorization": f"Bearer {legacy}"}).status_code == 401

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { API_BASE } from "@/lib/api";
+import PasswordInput from "@/components/auth/PasswordInput";
 
 type Tab = "signin" | "register";
 
@@ -103,7 +104,7 @@ function SignInForm() {
         placeholder="you@example.com" autoComplete="email" required autoFocus />
 
       <label style={{ ...P.label, marginTop: 12 }}>Password</label>
-      <input style={P.input} type="password" value={password}
+      <PasswordInput style={P.input} value={password}
         onChange={e => setPassword(e.target.value)}
         placeholder="••••••••" autoComplete="current-password" required />
 
@@ -165,12 +166,12 @@ function RegisterForm({ onRegistered }: { onRegistered: () => void }) {
         placeholder="you@example.com" autoComplete="email" required />
 
       <label style={{ ...P.label, marginTop: 12 }}>Password</label>
-      <input style={P.input} type="password" value={password}
+      <PasswordInput style={P.input} value={password}
         onChange={e => setPassword(e.target.value)}
         placeholder="Min. 8 characters" autoComplete="new-password" required />
 
       <label style={{ ...P.label, marginTop: 12 }}>Confirm password</label>
-      <input style={P.input} type="password" value={confirm}
+      <PasswordInput style={P.input} value={confirm}
         onChange={e => setConfirm(e.target.value)}
         placeholder="Repeat password" autoComplete="new-password" required />
 

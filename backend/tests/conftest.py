@@ -197,7 +197,7 @@ def _make_user(role: str) -> tuple[int, str]:
                  hashed_password=hash_password("password123"), role=role)
         s.add(u)
         s.commit()
-        return u.id, create_access_token(user_id=u.id, role=role)
+        return u.id, create_access_token(user_id=u.id, role=role, hashed_password=u.hashed_password)
 
 
 @pytest.fixture

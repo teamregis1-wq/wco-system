@@ -1,9 +1,13 @@
 """Authentication helpers: password hashing and JWT tokens.
 
 Passwords are hashed with bcrypt (never stored in plaintext). Tokens are
-signed JWTs carrying the user id and role. The get_current_user dependency
-decodes the token on protected routes.
+signed JWTs carrying the user id, role and a fingerprint of the password they
+were issued under; changing or resetting a password therefore ends every
+existing session. The get_current_user dependency decodes the token on
+protected routes.
 """
+import hashlib
+import hmac
 from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, HTTPException, status
@@ -29,12 +33,23 @@ def verify_password(plain: str, hashed: str) -> bool:
     return pwd_context.verify(plain, hashed)
 
 
-def create_access_token(*, user_id: int, role: str) -> str:
+def password_fingerprint(hashed_password: str) -> str:
+    """Keyed digest of the stored hash (reveals nothing about the password).
+
+    Embedded in every token; when the password changes, the fingerprint no
+    longer matches and tokens issued before the change are rejected.
+    """
+    return hmac.new(settings.jwt_secret.encode(), hashed_password.encode(),
+                    hashlib.sha256).hexdigest()[:16]
+
+
+def create_access_token(*, user_id: int, role: str, hashed_password: str) -> str:
     now = datetime.now(timezone.utc)
     expire = now + timedelta(minutes=settings.access_token_expire_minutes)
     # "role" is informational for the client only; authorization always uses
     # the role stored in the database (see get_current_user / require_role).
-    payload = {"sub": str(user_id), "role": role, "iat": now, "exp": expire}
+    payload = {"sub": str(user_id), "role": role, "iat": now, "exp": expire,
+               "pwv": password_fingerprint(hashed_password)}
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
@@ -62,6 +77,13 @@ def get_current_user(
     user = db.get(User, user_id)
     if user is None:
         raise credentials_exception
+    if not hmac.compare_digest(str(payload.get("pwv", "")),
+                               password_fingerprint(user.hashed_password)):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Your session has ended because the password was changed. Please sign in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     return user
 
 
